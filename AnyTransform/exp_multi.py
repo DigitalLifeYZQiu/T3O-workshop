@@ -5,7 +5,7 @@ import signal
 import sys
 from datetime import datetime
 from math import ceil
-
+import argparse
 import pandas as pd
 import pynvml
 
@@ -509,28 +509,66 @@ if __name__ == "__main__":
     #          num_params=500, num_samples=500, ablation='none', seed=seed)
 
     # MP 单进程实验 记录adptation时间：
-    _model_names = ['Timer-UTSD', 'MOIRAI-base', 'Chronos-tiny']
-    _data_names = ['ETTh1']
-    _pred_lens = [96]
-    _seed_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    _max_processes = 1
-    _num_list = [25, 100, 500]
-    _fix_num = 100
+    # _model_names = ['Timer-UTSD', 'MOIRAI-base', 'Chronos-tiny']
+    # _data_names = ['ETTh1']
+    # _pred_lens = [24, 48, 96, 192]
+    # _seed_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    # _max_processes = 8
+    # _num_list = [500]
+    # _fix_num = 100
     # P100S100
-    for seed in _seed_list:
-        main(_model_names, _data_names, _pred_lens,
-             num_params=_fix_num, num_samples=_fix_num, ablation='none', max_processes=_max_processes, seed=seed)
+    # for seed in _seed_list:
+    #     main(_model_names, _data_names, _pred_lens,
+    #          num_params=_fix_num, num_samples=_fix_num, ablation='none', max_processes=_max_processes, seed=seed)
     # 固定P100，调整S
-    for seed in _seed_list:
-        for num_samples in _num_list:
-            if num_samples == _fix_num:
-                continue
-            main(_model_names, _data_names, _pred_lens,
-                 num_params=_fix_num, num_samples=num_samples, ablation='none', max_processes=_max_processes, seed=seed)
+    # for seed in _seed_list:
+    #     for num_samples in _num_list:
+    #         if num_samples == _fix_num:
+    #             continue
+    #         main(_model_names, _data_names, _pred_lens,
+    #              num_params=_fix_num, num_samples=num_samples, ablation='none', max_processes=_max_processes, seed=seed)
     # 固定S100，调整P
-    for seed in _seed_list:
-        for num_params in _num_list:
-            if num_params == _fix_num:
-                continue
-            main(_model_names, _data_names, _pred_lens,
-                 num_params=num_params, num_samples=_fix_num, ablation='none', max_processes=_max_processes, seed=seed)
+    # for seed in _seed_list:
+    #     for num_params in _num_list:
+    #         if num_params == _fix_num:
+    #             continue
+    #         main(_model_names, _data_names, _pred_lens,
+    #              num_params=num_params, num_samples=_fix_num, ablation='none', max_processes=_max_processes, seed=seed)
+    # num_samples_list = [500]
+    # num_params_list = [500]
+    # for seed in _seed_list:
+    #     for num_samples in num_samples_list:
+    #         for num_params in num_params_list:
+    #             main(_model_names, _data_names, _pred_lens,
+    #                  num_params=num_params, num_samples=num_samples, ablation='none', max_processes=_max_processes, seed=seed)
+    
+    parser = argparse.ArgumentParser(description='T3O')
+    parser.add_argument('--seed', type=int, default=2, help="Randomization seed")
+    parser.add_argument('--model_names', type=str, default='Timer-UTSD', help="Model names (in string format or list of strings seperated by spaces)")
+    parser.add_argument('--data_names', type=str, default='ETTh1', help='Data names (in string format or list of strings seperated by spaces)')
+    parser.add_argument('--pred_lens', type=str, default='24 48 96 192', help='Prediction lengths (in string format or list of strings seperated by spaces)')
+    parser.add_argument('--num_params', type=int, default=500, help='Number of parameters (in integer format)')
+    parser.add_argument('--num_samples', type=int, default=500, help='Number of samples (in integer format)')
+    parser.add_argument('--ablation', type=str, default='none', help='Ablation mode (none, trim or clip)')
+    parser.add_argument('--max_processes', type=int, default=1, help='Maximum number of processes to use')
+    
+    
+    args = parser.parse_args()
+    
+    _model_names = args.model_names.split(' ')
+    _data_names = args.data_names.split(' ')
+    _pred_lens = [int(x) for x in args.pred_lens.split(' ')]
+    # _num_params = [int(x) for x in args.num_params.split(' ')]
+    # _num_samples = [int(x) for x in args.num_samples.split(' ')]
+    # _ablation = args.ablation
+    # _max_processes = args.max_processes
+    main(
+        _model_names,
+        _data_names,
+        _pred_lens,
+        num_params=args.num_params,
+        num_samples=args.num_samples,
+        ablation=args.ablation,
+        max_processes=args.max_processes,
+        seed=args.seed
+    )
