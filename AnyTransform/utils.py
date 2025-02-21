@@ -154,6 +154,168 @@ def get_params_space_and_org(fast_mode=None):
     # logging.info(f"origin_param_dict={origin_param_dict}")
     return params_space, origin_param_dict
 
+def get_params_space_and_org_cov(fast_mode=None):
+    if fast_mode is None:
+        from parser import fast_mode,  ablation
+        patch_len=96
+    else:
+        patch_len = 96
+        ablation = 'none'
+    params_space = {
+        'sampler_factor': {
+            'type': 'int',
+            'values': np.arange(1, 2 + 1, 1)  # 减小space
+            # 'values': np.arange(1, 3 + 1, 1)  # TODO：未来再改成float # 现在不怎么过拟合了，有必要扩大吗？效果一般
+            # if ablation != 'Sampler' else [1]
+            # 'type': 'float',
+            # 'values': np.linspace(1, 2, 5)  # array([1.  , 1.25, 1.5 , 1.75, 2.  ]) # 连续取值太多
+            # 'type': 'str',
+            # 'values': [0.5, 1]
+        },
+        'trimmer_seq_len': {
+            'type': 'int',  # (40,96,1) Chronos+Cuda稳定报错
+            'values': np.arange(5 * patch_len, (15 + 1) * patch_len, int(patch_len * 1))  # 补align危险？？？
+            # if ablation != 'Trimmer' else [7 * patch_len],
+        },
+        'aligner_mode': {
+            'type': 'str',
+            'values': ['none', 'data_patch']  # 减小Space
+            # 'values': ['none', 'data_patch', 'model_patch']  # hope2
+            # if ablation != 'Aligner' else ['none'],
+        },
+        'aligner_method': {
+            'type': 'str',  # zero_pad会被明显排除 不过会影响整体可视化和debug
+            'values': ['edge_pad']  # 减小Space
+            # 'values': ['mean_pad', 'edge_pad']  # none+model_patch变差？？？确实 特别是UTSD。。。trim更差。。。
+            # if ablation != 'Aligner' else ['edge_pad'],  # 跟org一致
+            # 'mean_pad', 'edge_pad', 'none', 'trim'
+        },
+        'normalizer_method': {
+            'type': 'str',  # 'minmax', 'maxabs' 减小搜索空间 ????????????'minmax', 'maxabs'???????????
+            'values': ['none', 'standard', 'robust']  # robust略慢...！！
+            # if ablation != 'Normalizer' else ['none'],
+            # 'values': ['none', 'standard', 'robust', 'minmax', 'maxabs']
+        },
+        'normalizer_mode': {
+            'type': 'str',  # train overfit??? ???????????????????????leak！ 'history'导致Weather坏?????
+            'values': ['input']
+            # if ablation != 'Normalizer' else ['input'],
+            # 'values': ['none', 'input', 'history', 'train'] 'dataset'
+        },
+        'normalizer_ratio': {  # new!!!
+            'type': 'str',
+            'values': [1]  # 减小space
+            # 'values': [1, 0.5, 0.25]
+            # if ablation != 'Normalizer' else [1],
+        },
+        'inputer_detect_method': {
+            'type': 'str',  # iqr计算时间长了一点(1/2 model)！！
+            'values': ['none', '3_sigma', '1.5_iqr']
+            # if ablation != 'Inputer' else ['none'],
+            # 'values': ['none', '3_sigma', '1.5_iqr']
+        },
+        # ! Covariate
+        'inputer_detect_method_cov': {
+            'type': 'str',  # iqr计算时间长了一点(1/2 model)！！
+            'values': ['none', '3_sigma', '1.5_iqr']
+            # if ablation != 'Inputer' else ['none'],
+            # 'values': ['none', '3_sigma', '1.5_iqr']
+        },
+        'inputer_fill_method': {  # forward_fill感觉很多时候也不如不impute... # forward_fill在ETT上差！
+            'type': 'str',  # 'forward_fill', 'backward_fill' 减小搜索空间 # rolling_mean有时候遇大倾斜很坏！！！
+            'values': ['linear_interpolate']
+            # if ablation != 'Inputer' else ['linear_interpolate'],
+            # 'values': ['none', 'linear_interpolate', 'rolling_mean', 'forward_fill']
+        },
+        'warper_method': {  # 'boxcox'+Uni2ts -> 有时候nan 而且秒级 # yeojohnson 有时候会-1847倍...overfit..??
+            'type': 'str',  # 'log' 'sqrt' 坏
+            'values': ['none', 'log']  # 减小space
+            # 'values': ['none', 'log', 'sqrt']  # ！！！！log能让Electricity和Weather变好！->本质：变得不那么差; 但是整体会'坏...
+            # if ablation != 'Warper' else ['none'],
+            # 'values': ['none', 'log', 'boxcox', 'yeojohnson']
+        },
+        'decomposer_period': {  # 有点太慢了...并行抢cpu # 现在还行 # 整体貌似会变差？rand？
+            'type': 'str',
+            'values': ['none']
+            # if ablation != 'Decomposer' else ['none'],
+            # 'values': ['none', '60', '24', '30', '7', '12', '365']
+            # '60', '24', '365'？
+            # 12 6 4 24
+            # '24', '60'
+        },
+        'decomposer_components': {
+            'type': 'str',  # 'trend+season', 'season+residual', 'trend+residual'
+            'values': ['none']
+            # if ablation != 'Decomposer' else ['none'],
+            # 'values': ['trend', 'season', 'residual', 'trend+season', 'season+residual', 'trend+residual', 'none']
+            # 'trend', 'season', 'trend+season', 'trend+residual', 'season+residual'
+            # 'trend+season', 'trend+residual', 'season+residual'
+            # 'season+residual', 'season'
+            # 'season+residual', 'season'
+        },
+        # Differentiator
+        'differentiator_n': {
+            'type': 'int',
+            'values': [0, 1]
+            # if ablation != 'Differentiator' else [0],
+        },
+        # ! Covariate
+        'differentiator_n_cov': {
+            'type': 'int',
+            'values': [0, 1]
+            # if ablation != 'Differentiator' else [0],
+        },
+        'pipeline_name': {
+            'type': 'str',
+            'values': ['infer1', 'infer3']  # 减小Space
+            # 'values': ['infer1', 'infer2', 'infer3']
+            # if ablation != 'Pipeline' else ['infer1'],  # 跟org一致
+        },
+        'denoiser_method': {
+            'type': 'str',  # 'moving_average' 配上 forward—fill导致UTSD在ETT上很差！？ # 'fft'没用？
+            'values': ['none', 'ewma']  # 减小Space
+            # 'values': ['none', 'ewma', 'moving_average']
+            # if ablation != 'Denoiser' else ['none'],
+        },
+        # ! Covariate
+        'denoiser_method_cov': {
+            'type': 'str',  # 'moving_average' 配上 forward—fill导致UTSD在ETT上很差！？ # 'fft'没用？
+            'values': ['none', 'ewma']  # 减小Space
+            # 'values': ['none', 'ewma', 'moving_average']
+            # if ablation != 'Denoiser' else ['none'],
+        },
+        'clip_factor': {
+            'type': 'str',
+            'values': ['none', '0', '0.25']
+            # if ablation != 'Clipper' else ['none'],
+        }
+        # 大约十万的space yes
+    }
+    # logging.info(f"params_space={params_space}")
+    # 注意：这个setting其实是比较随意的，最终只是为了说明默认值的效果一般（最好follow论文的设置）
+    origin_param_dict = {  # FIXME：
+        'sampler_factor': 1,
+        'trimmer_seq_len': patch_len * 7,
+        'aligner_mode': 'none',
+        'aligner_method': 'edge_pad',  # model_patch之后org一定需要是none！！！
+        'normalizer_method': 'none',  # FIXME： 目前已经使用了Timer内置的std的scaler
+        'normalizer_mode': 'input',
+        'normalizer_ratio': 1,
+        'inputer_detect_method': 'none',
+        'inputer_detect_method_cov': 'none',
+        'inputer_fill_method': 'linear_interpolate',
+        'warper_method': 'none',
+        'decomposer_period': 'none',
+        'decomposer_components': 'none',
+        'differentiator_n': 0,
+        'differentiator_n_cov': 0,
+        'pipeline_name': 'infer3',
+        'denoiser_method': 'none',
+        'denoiser_method_cov': 'none',
+        'clip_factor': 'none'  # FIXME: 原来是0 但实际上不影响，只是算子内部的clip
+    }
+    # logging.info(f"origin_param_dict={origin_param_dict}")
+    return params_space, origin_param_dict
 
 class TimeRecorder:
     def __init__(self, event_name):
@@ -231,8 +393,14 @@ def get_max_batch_size_for_cuda(model_name):
 def my_clip(seq_in, seq_out, nan_inf_clip_factor=None, min_max_clip_factor=None):
     # nan_inf_clip_factor=3, min_max_clip_factor=2 ...
     # mean+1.5IQR-> max+0.25range
-    max_values = np.max(seq_in, axis=1, keepdims=True)
-    min_values = np.min(seq_in, axis=1, keepdims=True)
+    if isinstance(seq_in, np.ndarray):
+        max_values = np.max(seq_in, axis=1, keepdims=True)
+        min_values = np.min(seq_in, axis=1, keepdims=True)
+    elif isinstance(seq_in, torch.Tensor):
+        max_values = torch.max(seq_in, dim=1, keepdim=True).values
+        min_values = torch.min(seq_in, dim=1, keepdim=True).values
+    else:
+        raise ValueError(f"Unknown type: {type(seq_in)}")
     range_values = max_values - min_values
 
     assert nan_inf_clip_factor is not None or min_max_clip_factor is not None, \
@@ -244,7 +412,11 @@ def my_clip(seq_in, seq_out, nan_inf_clip_factor=None, min_max_clip_factor=None)
         logging.info(f"seq_out contains NaN values!!! \n")
         logging.debug(f"seq_out contains NaN values!!!: {seq_out}")
         # seq_out = np.nan_to_num(seq_out, nan=(max_values + min_values) / 2, posinf=max_allowed, neginf=min_allowed)
-        seq_out = np.nan_to_num(seq_out, nan=max_allowed, posinf=max_allowed, neginf=min_allowed)  # nan hard punish
+        if isinstance(seq_out, np.ndarray):
+            seq_out = np.nan_to_num(seq_out, nan=max_allowed, posinf=max_allowed, neginf=min_allowed)  # nan hard punish
+        elif isinstance(seq_out, torch.Tensor):
+            seq_out = torch.nan_to_num(seq_out, nan=max_allowed, posinf=max_allowed, neginf=min_allowed)  # nan hard punish
+        
         # logging.warning(f"seq_out after filling NaN values: {seq_out}")
     if min_max_clip_factor is not None:
         max_allowed = max_values + min_max_clip_factor * range_values
@@ -254,7 +426,8 @@ def my_clip(seq_in, seq_out, nan_inf_clip_factor=None, min_max_clip_factor=None)
             logging.info(f"seq_out out of range!!!: \n")
             logging.debug(f"seq_out out of range!!!: {seq_out}")
             # seq_out = np.clip(seq_out, min_allowed, max_allowed)
-            # logging.warning(f"seq_out after clipping: {seq_out}")
+            # logging.warning(f"seq_out after cl
+            # ipping: {seq_out}")
             # FIXME：助长scale的气焰....危险 # 使用allowed！Ok ->对scale的处理还是有点问题？weizhi
             seq_out = smart_clip(seq_out, min_allowed, max_allowed, seq_in_last_values)
             # logging.warning(f"seq_out after smart scaling: {seq_out}")
@@ -262,7 +435,7 @@ def my_clip(seq_in, seq_out, nan_inf_clip_factor=None, min_max_clip_factor=None)
 
 
 def smart_clip(seq, min_allowed, max_allowed, seq_in_last_values):
-    assert seq.ndim == 3, "Input sequence must be 3D: (batch, time, feature)"
+    assert len(seq.shape) == 3, "Input sequence must be 3D: (batch, time, feature)"
     assert min_allowed.shape == max_allowed.shape == (seq.shape[0], 1, seq.shape[2]), \
         "Min and max must have shape (batch, 1, feature)"
 
@@ -271,18 +444,29 @@ def smart_clip(seq, min_allowed, max_allowed, seq_in_last_values):
     # assert np.all(first_elements < max_values) and np.all(first_elements > min_values), \
     #     f"The first elements must be within min and max values: \n" \
     #     f"first_elements:{first_elements}, \nmin_values:{min_values}, \nmax_values:{max_values}"
-    # FIXME:
-    if np.any(first_elements > max_allowed) or np.any(first_elements < min_allowed):
-        logging.info(f"The first elements must be within min and max allowed!!!\n")
-        logging.debug(f"The first elements must be within min and max allowed: \n"
-                      f"first_elements:{first_elements}, \nmin_allowed:{min_allowed}, \nmax_allowed:{max_allowed}")
-        # return np.clip(seq, min_allowed, max_allowed)
-        # FIXME：平移first使得跟last一样,即在(first,last)之间进行scale
-        seq = seq - first_elements + seq_in_last_values
-
-    # Calculate scaling factors for each batch
-    seq_max_values = np.max(seq, axis=1, keepdims=True)  # Include the first element
-    seq_min_values = np.min(seq, axis=1, keepdims=True)  # Include the first element
+    if isinstance(seq, np.ndarray):
+        if np.any(first_elements > max_allowed) or np.any(first_elements < min_allowed):
+            logging.info(f"The first elements must be within min and max allowed!!!\n")
+            logging.debug(f"The first elements must be within min and max allowed: \n"
+                          f"first_elements:{first_elements}, \nmin_allowed:{min_allowed}, \nmax_allowed:{max_allowed}")
+            # return np.clip(seq, min_allowed, max_allowed)
+            # FIXME：平移first使得跟last一样,即在(first,last)之间进行scale
+            seq = seq - first_elements + seq_in_last_values
+        seq_max_values = np.max(seq, axis=1, keepdims=True)  # Include the first element
+        seq_min_values = np.min(seq, axis=1, keepdims=True)  # Include the first element isinstance(seq_in, torch.Tensor):
+    elif isinstance(seq, torch.Tensor):
+        if torch.any(first_elements > max_allowed) or torch.any(first_elements < min_allowed):
+            logging.info(f"The first elements must be within min and max allowed!!!\n")
+            logging.debug(f"The first elements must be within min and max allowed: \n"
+                          f"first_elements:{first_elements}, \nmin_allowed:{min_allowed}, \nmax_allowed:{max_allowed}")
+            # return torch.clamp(seq, min=min_allowed, max=max_allowed)
+            # FIXME：平移first使得跟last一样,即在(first,last)之间进行scale
+            seq = seq - first_elements + seq_in_last_values
+        seq_max_values = torch.max(seq, dim=1, keepdim=True).values
+        seq_min_values = torch.min(seq, dim=1, keepdim=True).values
+    else:
+        raise ValueError(f"Unknown type: {type(seq_in)}")
+    
 
     # Apply scaling to the sequences that exceed the max values
     for i in range(batch):

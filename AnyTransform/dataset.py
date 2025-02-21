@@ -79,6 +79,41 @@ class CustomDataset(Dataset):
         history, label = _history_with_label[:, :-self.pred_len, :], _history_with_label[:, -self.pred_len:, :]
         return real_idx, aug_method, history, label
 
+class CustomDatasetCov(Dataset):
+    def __init__(self, dataset, mode, target_column, max_seq_len, pred_len, augmentor, num_sample):
+        self.dataset = dataset
+        self.mode = mode
+        self.target_column = target_column
+        self.max_seq_len = max_seq_len
+        self.pred_len = pred_len
+        self.augmentor = augmentor
+        self.indices = self.dataset.get_available_idx_list(mode, max_seq_len, pred_len)
+        if num_sample != 'all':
+            selected_indices_indexes = np.linspace(0, len(self.indices) - 1, num_sample).astype(int)
+            self.indices = [self.indices[i] for i in selected_indices_indexes]
+        logging.info(f'{mode} dataset size: {len(self)}')
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        real_idx = self.indices[idx]
+        history_with_label, cov_history_with_label = self.dataset.get_cov_history_with_label(
+            self.target_column, self.mode, real_idx, self.max_seq_len, self.pred_len)
+        # 进行数据增强
+        _history_with_label = history_with_label.reshape((1, -1, 1))  # batch time feature
+        S,C = cov_history_with_label.shape
+        _cov_history_with_label = cov_history_with_label.reshape((1, S, C))
+        aug_method = 'none'
+        if self.mode != 'test':
+            aug_method = self.augmentor.get_aug_method()
+            _history_with_label = self.augmentor.apply_augmentation(_history_with_label)
+        # ！！！: shape可能会变成 (len(aug_methods), self.max_seq_len + self.pred_len, 1) # aug_batch time feature
+        assert _history_with_label.shape[2] == 1 and _history_with_label.shape[1] == self.max_seq_len + self.pred_len, \
+            f'Invalid history_with_label shape: {_history_with_label.shape}'
+        history, label = _history_with_label[:, :-self.pred_len, :], _history_with_label[:, -self.pred_len:, :]
+        cov_history, cov_label = _cov_history_with_label[:, :-self.pred_len, :], _cov_history_with_label[:, -self.pred_len:, :]
+        return real_idx, aug_method, history, label, cov_history, cov_label # 重载出其他变量；增广只在 OT 上进行
 
 def split721(train_len, val_len, test_len):
     total_len = train_len + val_len + test_len
@@ -95,19 +130,19 @@ def get_dataset(data_name, fast_split=None):
     if data_name == 'ETTh1':
         dataset = EttHour('../tslib/dataset/ETT-small', 'ETTh1.csv', fast_split)
     elif data_name == 'ETTh2':
-        dataset = EttHour('../tslib/ETT-small/', 'ETTh2.csv', fast_split)
+        dataset = EttHour('../tslib/dataset/ETT-small/', 'ETTh2.csv', fast_split)
     elif data_name == 'ETTm1':
-        dataset = EttMinute('../tslib/ETT-small/', 'ETTm1.csv', fast_split)
+        dataset = EttMinute('../tslib/dataset/ETT-small/', 'ETTm1.csv', fast_split)
     elif data_name == 'ETTm2':
-        dataset = EttMinute('../tslib/ETT-small/', 'ETTm2.csv', fast_split)
-    elif data_name == 'Exchange':
-        dataset = Exchange('../tslib/exchange_rate/', 'exchange_rate.csv', fast_split)
-    elif data_name == 'Weather':
-        dataset = Weather('../tslib/weather/', 'weather.csv', fast_split)
-    elif data_name == 'Electricity':
-        dataset = Electricity('../tslib/electricity/', 'electricity.csv', fast_split)
-    elif data_name == 'Traffic':
-        dataset = Traffic('../tslib/traffic/', 'traffic.csv', fast_split)
+        dataset = EttMinute('../tslib/dataset/ETT-small/', 'ETTm2.csv', fast_split)
+    elif data_name == 'Exchange' or data_name == 'exchange_rate':
+        dataset = Exchange('../tslib/dataset/exchange_rate/', 'exchange_rate.csv', fast_split)
+    elif data_name == 'Weather' or data_name == 'weather':
+        dataset = Weather('../tslib/dataset/weather/', 'weather.csv', fast_split)
+    elif data_name == 'Electricity' or data_name == 'electricity':
+        dataset = Electricity('../tslib/dataset/electricity/', 'electricity.csv', fast_split)
+    elif data_name == 'Traffic' or data_name == 'traffic':
+        dataset = Traffic('../tslib/dataset/traffic/', 'traffic.csv', fast_split)
     else:
         raise ValueError(f"Unknown data_name: {data_name}")
     return dataset
@@ -115,7 +150,7 @@ def get_dataset(data_name, fast_split=None):
 
 class MyDataBase:
     column_names = ['OT']
-
+    # 分开定义目标变量与其他变量
     def __init__(self, root_path, data_path, train_start, train_end, val_start, val_end, test_start, test_end):
         self.root_path = root_path
         self.data_path = data_path
@@ -130,6 +165,7 @@ class MyDataBase:
         df_raw = pd.read_csv(os.path.join(self.root_path, self.data_path))
         # 丢掉第一列date
         df_raw = df_raw.iloc[:, 1:]
+        self.df_data = df_raw
         # dict: column:np.1dArray
         self.np_data_dict = {col: np.array(df_raw[col].values).reshape(-1) for col in df_raw.columns}
 
@@ -151,7 +187,26 @@ class MyDataBase:
         # history = self.np_data_dict[target][real_idx - max_seq_len: real_idx]
         # label = self.np_data_dict[target][real_idx: real_idx + pred_len]
         history_with_label = self.np_data_dict[target][real_idx - max_seq_len: real_idx + pred_len]
+        
         return history_with_label
+    
+    def get_cov_history_with_label(self, target, flag, real_idx, max_seq_len, pred_len):
+        # flag: train, test, val
+        # target: column:   HUFL	HULL	MUFL	MULL	LUFL	LULL	OT
+        assert flag in ['train', 'val', 'test'], \
+            f'Invalid flag: {flag}'
+        assert target in self.column_names, \
+            f'Invalid target: {target}'
+        # real_idx = idx + self.__getattribute__(flag + '_start')
+        assert real_idx - max_seq_len >= 0, \
+            f'Invalid real_idx: {real_idx}, max_seq_len: {max_seq_len}'
+        assert real_idx + pred_len < self.__getattribute__(flag + '_end'), \
+            f'Invalid real_idx: {real_idx}, pred_len: {pred_len}'
+        # history = self.np_data_dict[target][real_idx - max_seq_len: real_idx]
+        # label = self.np_data_dict[target][real_idx: real_idx + pred_len]
+        history_with_label = self.np_data_dict[target][real_idx - max_seq_len: real_idx + pred_len]
+        cov_history_with_label = self.df_data.values[real_idx - max_seq_len: real_idx + pred_len, :-1]
+        return history_with_label, cov_history_with_label
 
     def get_available_idx_list(self, mode, max_seq_len, pred_len):
         # max_seq_len 一般取train_len/2
@@ -202,9 +257,33 @@ class MyDataBase:
             mode_data = self.np_data_dict[target][self.test_start:self.test_end].reshape(-1, 1)
         else:
             raise ValueError('Invalid mode')
-        scaler.fit(mode_data)
+        scaler.fit(mode_data)#! Is fitting scaler on validate and test data applicable?
         # Store the scaler for future use
         self.scalers[(mode, target, method)] = scaler
+        return scaler
+    
+    def get_scaler(self, method, target):
+        assert target in self.column_names
+        assert method in ['none', 'standard', 'robust']
+
+        if method == 'none':
+            return None
+
+        if (target, method) in self.scalers:
+            return self.scalers[(target, method)]
+
+        # Create and fit new scaler only if not already computed
+        if method == 'standard':
+            scaler = StandardScaler()
+        elif method == 'robust':
+            scaler = RobustScaler()
+        else:
+            raise ValueError('Invalid scaler method')
+        # Fit scaler to training data
+        mode_data = self.np_data_dict[target][self.train_start:self.train_end].reshape(-1, 1)
+        scaler.fit(mode_data)#! Is fitting scaler on validate and test data applicable?
+        # Store the scaler for future use
+        self.scalers[(target, method)] = scaler
         return scaler
 
     # def get_train_statistics_dict(self, target):  # 不被inputer使用，因为害怕数据偏移，用max_seq

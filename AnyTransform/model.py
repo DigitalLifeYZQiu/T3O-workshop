@@ -15,7 +15,7 @@ sys.path.append(os.path.dirname(SCRIPT_DIR))
 from AnyTransform import ExpTimer
 from AnyTransform.augmentor import Augmentor
 from AnyTransform.dataset import get_dataset, CustomDataset
-
+from transformers import AutoModelForCausalLM
 
 def is_pycharm():
     for key, value in os.environ.items():
@@ -26,54 +26,83 @@ def is_pycharm():
 
 matplotlib.use('TkAgg') if is_pycharm() else None
 
+class TimerXL:
+    def __init__(self, model_name, ckpt_path, device):
+        self.model_name = model_name
+        self.patch_len = 96
+        self.device = self.choose_device(device)
+        print(f'self.device: {self.device}')
+        self.model = AutoModelForCausalLM.from_pretrained(
+            #'/data/qiuyunzhong/Training-LTSM/checkpoints/models--thuml--timer-base/snapshots/35a991e1a21f8437c6d784465e87f24f5cc2b395',
+            ckpt_path,
+            trust_remote_code=True).to(self.device)
+    
+    def choose_device(self, device):
+        if 'cpu' == device:
+            return 'cpu'
+        elif 'cuda' in device:
+            idx = int(device.split(':')[-1])
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(idx)
+            return 'cuda:0'
+        else:
+            raise ValueError(f'Unknown device: {device}')
+    def forcast(self, data, pred_len):
+        
+        if len(data.shape) == 3:
+            data = torch.tensor(data[:,:,-1]).squeeze().float().to(self.device)
+            print('data.shape=', data.shape)
+        pred = self.model.generate(data, max_new_tokens=pred_len)
+        pred = pred.unsqueeze(2).detach().to('cpu').numpy()
+        return pred
+
 
 class Timer:
-    def __init__(self, model_name, ckpt_path, device):
-        parser = argparse.ArgumentParser(description='TimesNet')
-
-        # basic config
-        parser.add_argument('--task_name', type=str, default='large_finetune')
-        parser.add_argument('--seed', type=int, default=0)
-        parser.add_argument('--model', type=str, default='Timer')
-        parser.add_argument('--ckpt_path', type=str,
-                            default='checkpoints/Building_timegpt_d1024_l8_p96_n64_new_full.ckpt')
-        # model define
-        parser.add_argument('--patch_len', type=int, default=96)
-        parser.add_argument('--d_model', type=int, default=1024, help='dimension of model')
-        parser.add_argument('--n_heads', type=int, default=16, help='num of heads')
-        parser.add_argument('--e_layers', type=int, default=8, help='num of encoder layers')
-        parser.add_argument('--d_ff', type=int, default=2048, help='dimension of fcn')
-        parser.add_argument('--factor', type=int, default=3, help='attn factor')
-        parser.add_argument('--dropout', type=float, default=0.1, help='dropout')
-        parser.add_argument('--activation', type=str, default='gelu', help='activation')
-        parser.add_argument('--output_attention', action='store_true')
-        # GPU
-        parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
-        parser.add_argument('--gpu', type=int, default=0, help='gpu')
-        parser.add_argument('--use_multi_gpu', action='store_true', help='use multiple gpus', default=False)
-        parser.add_argument('--devices', type=str, default='0,1,2,3', help='device ids of multile gpus')
-
-        # args = parser.parse_args()
-
-        args = argparse.Namespace(
-            task_name='large_finetune',
-            seed=0,
-            model='Timer',
-            ckpt_path=ckpt_path,
-            patch_len=96,
-            d_model=1024,
-            n_heads=16,
-            e_layers=8,
-            d_ff=2048,
-            factor=3,
-            dropout=0.1,
-            activation='gelu',
-            output_attention=False,
-            use_gpu=True,
-            gpu=0,
-            use_multi_gpu=False,
-            devices='0,1,2,3'
-        )
+    def __init__(self, model_name, ckpt_path, device, args):
+        # parser = argparse.ArgumentParser(description='TimesNet')
+        #
+        # # basic config
+        # parser.add_argument('--task_name', type=str, default='large_finetune')
+        # parser.add_argument('--seed', type=int, default=0)
+        # parser.add_argument('--model', type=str, default='Timer')
+        # parser.add_argument('--ckpt_path', type=str,
+        #                     default='checkpoints/Building_timegpt_d1024_l8_p96_n64_new_full.ckpt')
+        # # model define
+        # parser.add_argument('--patch_len', type=int, default=96)
+        # parser.add_argument('--d_model', type=int, default=1024, help='dimension of model')
+        # parser.add_argument('--n_heads', type=int, default=16, help='num of heads')
+        # parser.add_argument('--e_layers', type=int, default=8, help='num of encoder layers')
+        # parser.add_argument('--d_ff', type=int, default=2048, help='dimension of fcn')
+        # parser.add_argument('--factor', type=int, default=3, help='attn factor')
+        # parser.add_argument('--dropout', type=float, default=0.1, help='dropout')
+        # parser.add_argument('--activation', type=str, default='gelu', help='activation')
+        # parser.add_argument('--output_attention', action='store_true')
+        # # GPU
+        # parser.add_argument('--use_gpu', type=bool, default=True, help='use gpu')
+        # parser.add_argument('--gpu', type=int, default=0, help='gpu')
+        # parser.add_argument('--use_multi_gpu', action='store_true', help='use multiple gpus', default=False)
+        # parser.add_argument('--devices', type=str, default='0,1,2,3', help='device ids of multile gpus')
+        #
+        # # args = parser.parse_args()
+        #
+        # args = argparse.Namespace(
+        #     task_name='large_finetune',
+        #     seed=0,
+        #     model='Timer',
+        #     ckpt_path=ckpt_path,
+        #     patch_len=96,
+        #     d_model=1024,
+        #     n_heads=16,
+        #     e_layers=8,
+        #     d_ff=2048,
+        #     factor=3,
+        #     dropout=0.1,
+        #     activation='gelu',
+        #     output_attention=False,
+        #     use_gpu=True,
+        #     gpu=0,
+        #     use_multi_gpu=False,
+        #     devices='0,1,2,3'
+        # )
 
         # _, args = parser.parse_known_args()  # 只解析默认的参数，而不是从命令行解析 ...
 
@@ -84,11 +113,11 @@ class Timer:
 
         args.ckpt_path = ckpt_path
         assert 'cpu' == device or 'cuda' in device
-        args.use_gpu = True if 'cuda' in device else False
-        args.gpu = device.split(':')[-1] if 'cuda' in device else 0
+        # args.use_gpu = True if 'cuda' in device else False
+        # args.gpu = device.split(':')[-1] if 'cuda' in device else 0
         # args.gpu = '0'  # 在外设置了CUDA_VISIBLE_DEVICES -》好像不对，Timer还是需要设置cuda:x
         print(f'args.use_gpu={args.use_gpu}, args.gpu={args.gpu}')
-
+        
         self.model_name = model_name
         self.args = args
         self.exp = ExpTimer(args)
@@ -119,11 +148,15 @@ import random
 import numpy as np
 
 
-def get_model(model_name, device):
+def get_model(model_name, device, args=None):
     if model_name == 'Timer-UTSD':
-        model = Timer(model_name, './Timer/ckpt/Building_timegpt_d1024_l8_p96_n64_new_full.ckpt', device)
+        model = Timer(model_name, './Timer/ckpt/Building_timegpt_d1024_l8_p96_n64_new_full.ckpt', device, args)
     elif model_name == 'Timer-LOTSA':
-        model = Timer(model_name, './Timer/ckpt/Large_timegpt_d1024_l8_p96_n64_new_full.ckpt', device)
+        model = Timer(model_name, './Timer/ckpt/Large_timegpt_d1024_l8_p96_n64_new_full.ckpt', device, args)
+    elif model_name == 'Timer1':
+        model = Timer(model_name, '/data/qiuyunzhong/LTSM/checkpoints/Timer_forecast_1.0.ckpt', device, args)
+    elif model_name == 'TimerXL':
+        model = TimerXL(model_name, '/data/qiuyunzhong/Training-LTSM/checkpoints/models--thuml--timer-base/snapshots/35a991e1a21f8437c6d784465e87f24f5cc2b395', device)
     # elif model_name == '-PatchTST-UTSD':
     #     model = PatchTST('./-PatchTST/pretrain_checkpoints/UTSD-12G/ckpt_best.pth', device)
     elif model_name == 'MOIRAI-small':
@@ -182,14 +215,15 @@ class MOIRAI:  # 速度对batch敏感，几乎成倍增加时间
 
     def forcast(self, data, pred_len):
         batch_size, seq_len, feature = data.shape
-        assert feature == 1, f'feature={feature}'
+        # assert feature == 1, f'feature={feature}'
 
         # real_seq_l = len(data)
         real_seq_l = seq_len
         real_pred_l = pred_len
 
         # 重新拼接了同一个batch内的data！！！ 由此test_data的生成方式也会变！！！
-        _data = data.reshape(batch_size * real_seq_l)
+        # _data = data.reshape(batch_size * real_seq_l)
+        _data = data.reshape(batch_size * real_seq_l * feature)
         seq_with_zero_pred = np.concatenate([_data, np.zeros(real_pred_l)])
         date_range = pd.date_range(start='1900-01-01', periods=len(seq_with_zero_pred), freq='s')
         data_pd = pd.DataFrame(seq_with_zero_pred, index=date_range, columns=['target'])
@@ -222,7 +256,10 @@ class MOIRAI:  # 速度对batch敏感，几乎成倍增加时间
         # return pred
         assert len(forecast_list) == batch_size, f'len(forcast_list)={len(forecast_list)}'
         preds = np.array([forecast.quantile(0.5) for forecast in forecast_list])
-        preds = preds.reshape((batch_size, real_pred_l, 1))
+        
+        # ? Modification for covariate setting
+        # preds = preds.reshape((batch_size, real_pred_l, 1))
+        preds = preds.reshape((batch_size, real_pred_l, feature))
         return preds
 
 
@@ -249,7 +286,7 @@ class Chronos:  # pred较长时时间巨长...
             # torch_dtype=torch.bfloat16, # 不能用
             # torch_dtype=torch.float16,  # 更快
         )
-        # self.pipeline.model = self.pipeline.model.to(self.device)  # Ensure the model is on the correct device
+        self.pipeline.model = self.pipeline.model.to(self.device)  # Ensure the model is on the correct device
         self.pipeline.model.eval()
         self.num_samples = 3  # FIXME: 多次预测取median... default=20 目测一个也能用 (多了CUDA内存爆炸
         # bfloat16,float16,float32,float64

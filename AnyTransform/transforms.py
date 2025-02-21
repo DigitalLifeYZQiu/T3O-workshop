@@ -5,6 +5,7 @@ from math import ceil
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from joblib import Parallel, delayed
 from scipy import signal
 from scipy.fft import fft, ifft
@@ -25,7 +26,22 @@ def assert_timeseries_3d_np(data):
 
     # batch time feature
     # batch_size, time_step, feature_size = data.shape
-    assert type(data) is np.ndarray and data.ndim == 3 and data.shape[2] == 1, \
+    # ? modification for covariate setting
+    # assert type(data) is np.ndarray and data.ndim == 3 and data.shape[2] == 1, \
+    #     f'type(data)={type(data)}, data.ndim={data.ndim}, data.shape={data.shape}'
+    assert type(data) is np.ndarray and data.ndim == 3, \
+        f'type(data)={type(data)}, data.ndim={data.ndim}, data.shape={data.shape}'
+
+def assert_timeseries_3d_tensor(data):
+    # assert type(data) is np.ndarray
+    # assert data.ndim == 1, f'Invalid data shape: {data.shape}'
+
+    # batch time feature
+    # batch_size, time_step, feature_size = data.shape
+    # ? modification for covariate setting
+    # assert type(data) is np.ndarray and data.ndim == 3 and data.shape[2] == 1, \
+    #     f'type(data)={type(data)}, data.ndim={data.ndim}, data.shape={data.shape}'
+    assert type(data) is torch.Tensor and data.ndim == 3, \
         f'type(data)={type(data)}, data.ndim={data.ndim}, data.shape={data.shape}'
 
 
@@ -64,29 +80,58 @@ class Normalizer:
         for i in range(feature):
             feature_data = data[:, :, i].reshape(batch, -1)[:, -look_back_len:]
             if self.method == 'standard':
-                mean = np.mean(feature_data, axis=1, keepdims=True)
-                std = np.std(feature_data, axis=1, keepdims=True)
+                if isinstance(data, np.ndarray):
+                    mean = np.mean(feature_data, axis=1, keepdims=True)
+                    std = np.std(feature_data, axis=1, keepdims=True)
+                elif isinstance(data, torch.Tensor):
+                    mean = torch.mean(feature_data, dim=1, keepdims=True)
+                    std = torch.std(feature_data, dim=1, keepdims=True)
+                else:
+                    raise ValueError('Invalid data type: {}'.format(type(data)))
                 params[i] = (mean, std)
             elif self.method == 'minmax':
-                min_val = np.min(feature_data, axis=1, keepdims=True)
-                max_val = np.max(feature_data, axis=1, keepdims=True)
+                if isinstance(data, np.ndarray):
+                    min_val = np.min(feature_data, axis=1, keepdims=True)
+                    max_val = np.max(feature_data, axis=1, keepdims=True)
+                elif isinstance(data, torch.Tensor):
+                    min_val = torch.min(feature_data, dim=1, keepdims=True)
+                    max_val = torch.max(feature_data, dim=1, keepdims=True)
+                else:
+                    raise ValueError('Invalid data type: {}'.format(type(data)))
                 params[i] = (min_val, max_val)
             elif self.method == 'maxabs':
-                max_abs_val = np.max(np.abs(feature_data), axis=1, keepdims=True)
+                if isinstance(data, np.ndarray):
+                    max_abs_val = np.max(np.abs(feature_data), axis=1, keepdims=True)
+                elif isinstance(data, torch.Tensor):
+                    max_abs_val = torch.max(torch.abs(feature_data), dim=1, keepdims=True)
+                else:
+                    raise ValueError('Invalid data type: {}'.format(type(data)))
                 params[i] = max_abs_val
             elif self.method == 'robust':
-                median = np.median(feature_data, axis=1, keepdims=True)
-                q1 = np.percentile(feature_data, 25, axis=1, keepdims=True)
-                q3 = np.percentile(feature_data, 75, axis=1, keepdims=True)
+                if isinstance(data, np.ndarray):
+                    median = np.median(feature_data, axis=1, keepdims=True)
+                    q1 = np.percentile(feature_data, 25, axis=1, keepdims=True)
+                    q3 = np.percentile(feature_data, 75, axis=1, keepdims=True)
+                elif isinstance(data, torch.Tensor):
+                    median = torch.median(feature_data, dim=1, keepdims=True).values
+                    q1 = torch.quantile(feature_data, 0.25, dim=1, keepdim=True)
+                    q3 = torch.quantile(feature_data, 0.75, dim=1, keepdim=True)
+                else:
+                    raise ValueError('Invalid data type: {}'.format(type(data)))
                 params[i] = (median, q1, q3)
         return params
 
     def pre_process(self, data):
         if self.mode == 'none' or self.method == 'none':
             return data
-        assert data.ndim == 3  # (batch, time, feature)
+        assert len(data.shape) == 3  # (batch, time, feature)
         batch, time, feature = data.shape
-        res = np.zeros_like(data)
+        if isinstance(data, np.ndarray):
+            res = np.zeros_like(data)
+        elif isinstance(data, torch.Tensor):
+            res = torch.zeros_like(data)
+        else:
+            raise ValueError('Invalid data type: {}'.format(type(data)))
         if self.mode == 'dataset':
             # 使用 sklearn 的 scaler 进行变换
             for i in range(feature):
@@ -114,9 +159,14 @@ class Normalizer:
     def post_process(self, data):
         if self.mode == 'none' or self.method == 'none':
             return data
-        assert data.ndim == 3  # (batch, time, feature)
+        assert len(data.shape) == 3  # (batch, time, feature)
         batch, time, feature = data.shape
-        res = np.zeros_like(data)
+        if isinstance(data, np.ndarray):
+            res = np.zeros_like(data)
+        elif isinstance(data, torch.Tensor):
+            res = torch.zeros_like(data)
+        else:
+            raise ValueError('Invalid data type: {}'.format(type(data)))
         if self.mode == 'dataset':
             # 使用 sklearn 的 scaler 进行反变换
             for i in range(feature):
@@ -138,12 +188,20 @@ class Normalizer:
                 elif self.method == 'robust':
                     median, q1, q3 = self.scaler_params[i]
                     res[:, :, i] = (feature_data * (q3 - q1) + median).reshape(batch, time)
-
-        if np.isnan(res).any() or np.isinf(res).any():
-            logging.error(f"NaN or Inf values in restored data: {res}")
-            res = my_clip(self.data_in, res, nan_inf_clip_factor=nan_inf_clip_factor)  # 表示出结果很差
-        elif self.clip_factor is not None:
-            res = my_clip(self.data_in, res, min_max_clip_factor=self.clip_factor)  # 要求严格
+        if isinstance(self.data_in, np.ndarray):
+            if np.isnan(res).any() or np.isinf(res).any():
+                logging.error(f"NaN or Inf values in restored data: {res}")
+                res = my_clip(self.data_in, res, nan_inf_clip_factor=nan_inf_clip_factor)  # 表示出结果很差
+            elif self.clip_factor is not None:
+                res = my_clip(self.data_in, res, min_max_clip_factor=self.clip_factor)  # 要求严格
+        elif isinstance(self.data_in, torch.Tensor):
+            if torch.isnan(res).any() or torch.isinf(res).any():
+                res = my_clip(self.data_in, res, nan_inf_clip_factor=nan_inf_clip_factor)  # 表示出结果很差
+            elif self.clip_factor is not None:
+                res = my_clip(self.data_in, res, min_max_clip_factor=self.clip_factor)  # 要求严格
+        else:
+            raise ValueError('Invalid data type: {}'.format(type(data)))
+        
 
         return res
 
@@ -349,19 +407,87 @@ class Decomposer:
 class Sampler:
     def __init__(self, factor):
         self.factor = factor
+    
+    def torch_resample(self, x: torch.Tensor, num: int, dim: int = -1) -> torch.Tensor:
+        """
+        对张量进行重采样（类似 scipy.signal.resample）
+
+        参数：
+            x: 输入张量（支持任意维度）
+            num: 目标采样点数
+            dim: 沿着哪个维度进行重采样（默认最后一个维度）
+
+        返回：
+            重采样后的张量
+        """
+        # 获取原始长度
+        N = x.size(dim)
+        
+        # 计算傅里叶变换
+        X = torch.fft.rfft(x, dim=dim)
+        
+        # 调整频域分量长度
+        if num > N:
+            # 上采样：在中间填充零
+            X_resampled = torch.zeros((num,), dtype=X.dtype)
+            slices = [slice(None)] * X.ndim
+            slices[dim] = slice(0, X.size(dim))
+            X_resampled[slices] = X
+        else:
+            # 下采样：截断高频分量
+            X_resampled = X.narrow(dim, 0, num // 2 + 1)
+        
+        # 逆傅里叶变换并取实部
+        x_resampled = torch.fft.irfft(X_resampled, n=num, dim=dim)
+        
+        # 调整能量缩放（与 SciPy 一致）
+        x_resampled *= (num / N) ** 0.5
+        
+        return x_resampled
 
     def pre_process(self, data):
         if self.factor == 1:
             return data
-        assert_timeseries_3d_np(data)
+        # if type(data) is np.ndarray:
+        #     assert_timeseries_3d_np(data)
+        #     batch, time, feature = data.shape
+        #     res = np.zeros((batch, ceil(time * self.factor), feature))
+        #     for b in range(batch):
+        #         for f in range(feature):
+        #             res[b, :, f] = signal.resample(data[b, :, f], ceil(time * self.factor))
+        # elif type(data) is torch.Tensor:
+        #     assert_timeseries_3d_tensor(data)
+        #     batch, time, feature = data.shape
+        #     res = torch.zeros((batch, ceil(time * self.factor), feature))
+        #     for b in range(batch):
+        #         for f in range(feature):
+        #             res[b, :, f] = signal.resample(data[b, :, f], ceil(time * self.factor))
+        # else:
+        #     res = data
+        if type(data) is np.ndarray:
+            assert_timeseries_3d_np(data)
+            batch, time, feature = data.shape
+            res = np.zeros((batch, ceil(time / self.factor), feature))
+            for b in range(batch):
+                for f in range(feature):
+                    res[b, :, f] = signal.resample(data[b, :, f], ceil(time / self.factor))
+        elif type(data) is torch.Tensor:
+            assert_timeseries_3d_tensor(data)
+            batch, time, feature = data.shape
+            res = torch.zeros((batch, ceil(time * self.factor), feature)).to(data.device)
+            for b in range(batch):
+                for f in range(feature):
+                    res[b, :, f] = self.torch_resample(data[b, :, f], ceil(time * self.factor)).to(data.device)
+        else:
+            res = data
         # FIXME:resample不一样！！！可能去均值？？？/ 更差了。。。
         # if int(self.factor) == self.factor:
         #     return data[:, ::int(self.factor), :]
-        batch, time, feature = data.shape
-        res = np.zeros((batch, ceil(time / self.factor), feature))
-        for b in range(batch):
-            for f in range(feature):
-                res[b, :, f] = signal.resample(data[b, :, f], ceil(time / self.factor))
+        # batch, time, feature = data.shape
+        # res = np.zeros((batch, ceil(time / self.factor), feature))
+        # for b in range(batch):
+        #     for f in range(feature):
+        #         res[b, :, f] = signal.resample(data[b, :, f], ceil(time / self.factor))
         # 用mean_pad补全原来的shape的time的部分 -> 补全前面而不是后面！！！
         # res = Aligner(time, 'mean_pad').pre_process(res)
         return res
@@ -369,12 +495,22 @@ class Sampler:
     def post_process(self, data):
         if self.factor == 1:
             return data
-        assert_timeseries_3d_np(data)
-        batch, time, feature = data.shape
-        res = np.zeros((batch, ceil(time * self.factor), feature))
-        for b in range(batch):
-            for f in range(feature):
-                res[b, :, f] = signal.resample(data[b, :, f], ceil(time * self.factor))
+        if type(data) is np.ndarray:
+            assert_timeseries_3d_np(data)
+            batch, time, feature = data.shape
+            res = np.zeros((batch, ceil(time * self.factor), feature))
+            for b in range(batch):
+                for f in range(feature):
+                    res[b, :, f] = signal.resample(data[b, :, f], ceil(time * self.factor))
+        elif type(data) is torch.Tensor:
+            assert_timeseries_3d_tensor(data)
+            batch, time, feature = data.shape
+            res = torch.zeros((batch, ceil(time * self.factor), feature)).to(data.device)
+            for b in range(batch):
+                for f in range(feature):
+                    res[b, :, f] = self.torch_resample(data[b, :, f], ceil(time * self.factor))
+        else:
+            res = data
         return res
 
 
@@ -385,9 +521,12 @@ class Trimmer:
         self.pred_l = pred_l
 
     def pre_process(self, data):
-        if data.shape[1] == self.seq_l:
+        if data.shape[1] <= self.seq_l:
             return data
-        assert_timeseries_3d_np(data)
+        if type(data) is np.ndarray:
+            assert_timeseries_3d_np(data)
+        elif type(data) is torch.Tensor:
+            assert_timeseries_3d_tensor(data)
         assert data.shape[1] >= self.seq_l, f'Invalid data shape: {data.shape} for seq_l={self.seq_l}'
 
         res = data[:, -self.seq_l:, :]
@@ -396,7 +535,10 @@ class Trimmer:
     def post_process(self, data):
         if data.shape[1] == self.pred_l:
             return data
-        assert_timeseries_3d_np(data)
+        if type(data) is np.ndarray:
+            assert_timeseries_3d_np(data)
+        elif type(data) is torch.Tensor:
+            assert_timeseries_3d_tensor(data)
         assert data.shape[1] >= self.pred_l
         res = data[:, :self.pred_l, :]
         return res
@@ -414,12 +556,20 @@ class Aligner:
     def pre_process(self, data):  # padding mostly
         if self.mode == 'none' or self.method == 'none':
             return data
-        assert_timeseries_3d_np(data)
+        if type(data) is np.ndarray:
+            assert_timeseries_3d_np(data)
+        elif type(data) is torch.Tensor:
+            assert_timeseries_3d_tensor(data)
         batch, time, feature = data.shape
         if time % self.patch_len == 0:
             return data
         pad_l = self.patch_len - time % self.patch_len if time % self.patch_len != 0 else 0
-        res = np.zeros((batch, pad_l + time, feature))
+        if isinstance(data, np.ndarray):
+            res = np.zeros((batch, pad_l + time, feature))
+        elif isinstance(data, torch.Tensor):
+            res = torch.zeros((batch, pad_l + time, feature)).to(data.device)
+        else:
+            raise ValueError(f"Unsupported data type: {type(data)}")
         if self.method == 'trim':  # trim其实应该相信model自己完成。。。-》可能是0-pad
             if time < self.patch_len:  # 理论上不会出现
                 self.method = 'edge_pad'
@@ -429,16 +579,31 @@ class Aligner:
 
         for b in range(batch):
             for f in range(feature):
-                # FIXME：应在头部而不是尾部填充数据！！！(到这时单array了！
-                if self.method == 'zero_pad':
-                    res[b, :, f] = np.pad(data[b, :, f], (pad_l, 0), 'constant', constant_values=0)
-                elif self.method == 'mean_pad':  # FIXME:mean?axis?
-                    res[b, :, f] = np.pad(data[b, :, f], (pad_l, 0), 'constant', constant_values=np.mean(data[b, :, f]))
-                elif self.method == 'edge_pad':
-                    res[b, :, f] = np.pad(data[b, :, f], (pad_l, 0), 'edge')
+                if isinstance(data, np.ndarray):
+                    # FIXME：应在头部而不是尾部填充数据！！！(到这时单array了！
+                    if self.method == 'zero_pad':
+                        res[b, :, f] = np.pad(data[b, :, f], (pad_l, 0), 'constant', constant_values=0)
+                    elif self.method == 'mean_pad':  # FIXME:mean?axis?
+                        res[b, :, f] = np.pad(data[b, :, f], (pad_l, 0), 'constant', constant_values=np.mean(data[b, :, f]))
+                    elif self.method == 'edge_pad':
+                        res[b, :, f] = np.pad(data[b, :, f], (pad_l, 0), 'edge')
+                    else:
+                        raise Exception('Invalid aligner: {}'.format(self.method))
+                elif isinstance(data, torch.Tensor):
+                    if self.method == 'zero_pad':
+                        # 零填充
+                        res[b, :, f] = F.pad(data[b, :, f].unsqueeze(0).unsqueeze(0), (pad_l, 0), mode='constant', value=0).squeeze()
+                    elif self.method == 'mean_pad':
+                        # 均值填充
+                        mean_val = torch.mean(data[b, :, f])
+                        res[b, :, f] = F.pad(data[b, :, f].unsqueeze(0).unsqueeze(0), (pad_l, 0), mode='constant', value=mean_val).squeeze()
+                    elif self.method == 'edge_pad':
+                        # 边缘填充
+                        res[b, :, f] = F.pad(data[b, :, f].unsqueeze(0).unsqueeze(0), (pad_l, 0), mode='replicate').squeeze()
+                    else:
+                        raise Exception('Invalid aligner: {}'.format(self.method))
                 else:
-                    raise Exception('Invalid aligner: {}'.format(self.method))
-
+                    raise ValueError(f"Unsupported data type: {type(data)}")
         return res
 
     def post_process(self, data):
@@ -456,16 +621,30 @@ class Inputer:
     def get_statistics_dict(self, history_seq):
         if self.detect_method == 'none' or self.fill_method == 'none':
             return None
-        if 'sigma' in self.detect_method:
-            mean = np.mean(history_seq, axis=1, keepdims=True)
-            std = np.std(history_seq, axis=1, keepdims=True)
-            statistics_dict = {'mean': mean, 'std': std}
-        elif 'iqr' in self.detect_method:
-            q1 = np.percentile(history_seq, 25, axis=1, keepdims=True)
-            q3 = np.percentile(history_seq, 75, axis=1, keepdims=True)
-            statistics_dict = {'q1': q1, 'q3': q3}
+        if isinstance(history_seq, np.ndarray):
+            if 'sigma' in self.detect_method:
+                mean = np.mean(history_seq, axis=1, keepdims=True)
+                std = np.std(history_seq, axis=1, keepdims=True)
+                statistics_dict = {'mean': mean, 'std': std}
+            elif 'iqr' in self.detect_method:
+                q1 = np.percentile(history_seq, 25, axis=1, keepdims=True)
+                q3 = np.percentile(history_seq, 75, axis=1, keepdims=True)
+                statistics_dict = {'q1': q1, 'q3': q3}
+            else:
+                raise ValueError(f"Unsupported detect method: {self.detect_method}")
+        elif isinstance(history_seq, torch.Tensor):
+            if 'sigma' in self.detect_method:
+                mean = torch.mean(history_seq, dim=1, keepdim=True)
+                std = torch.std(history_seq, dim=1, keepdim=True)
+                statistics_dict = {'mean': mean, 'std': std}
+            elif 'iqr' in self.detect_method:
+                q1 = torch.quantile(history_seq, 0.25, dim=1, keepdim=True)
+                q3 = torch.quantile(history_seq, 0.75, dim=1, keepdim=True)
+                statistics_dict = {'q1': q1, 'q3': q3}
+            else:
+                raise ValueError(f"Unsupported detect method: {self.detect_method}")
         else:
-            raise ValueError(f"Unsupported detect method: {self.detect_method}")
+            raise ValueError(f"Unsupported data type: {type(history_seq)}")
         return statistics_dict
 
     def pre_process(self, data):
@@ -500,38 +679,53 @@ class Inputer:
         consecutive_count = 0  # 用于记录连续异常点的数量
         threshold = 1  # FIXME:需要移除的连续异常点数量阈值 （认为n个趋势！大了10和3不太好
         # threshold = seq_len / 4
-        for idx in range(1, len(fill_indices[0])):
-            # 若在同一个batch和同一个feature
-            batch_idx_last, batch_idx_cur = fill_indices[0][idx - 1], fill_indices[0][idx]
-            feature_idx_last, feature_idx_cur = fill_indices[2][idx - 1], fill_indices[2][idx]
-            time_idx_last, time_idx_cur = fill_indices[1][idx - 1], fill_indices[1][idx]
-            if batch_idx_cur == batch_idx_last and feature_idx_last == feature_idx_cur \
-                    and time_idx_cur - time_idx_last == 1 and time_idx_cur > seq_len * (1 - tail_ratio):
-                consecutive_count += 1
-                if consecutive_count >= threshold:
-                    # rm_indices.extend(range(idx - threshold + 1, idx + 1))  # 移除连续的异常点
-                    rm_indices.update(range(idx - threshold, idx))  # 移除连续的异常点
+        if len(fill_indices) > 0:  # ! Is 'fill_indices' possible to be None?
+            for idx in range(1, len(fill_indices[0])):
+                # 若在同一个batch和同一个feature
+                batch_idx_last, batch_idx_cur = fill_indices[0][idx - 1], fill_indices[0][idx]
+                feature_idx_last, feature_idx_cur = fill_indices[2][idx - 1], fill_indices[2][idx]
+                time_idx_last, time_idx_cur = fill_indices[1][idx - 1], fill_indices[1][idx]
+                if batch_idx_cur == batch_idx_last and feature_idx_last == feature_idx_cur \
+                        and time_idx_cur - time_idx_last == 1 and time_idx_cur > seq_len * (1 - tail_ratio):
+                    consecutive_count += 1
+                    if consecutive_count >= threshold:
+                        # rm_indices.extend(range(idx - threshold + 1, idx + 1))  # 移除连续的异常点
+                        rm_indices.update(range(idx - threshold, idx))  # 移除连续的异常点
+                else:
+                    consecutive_count = 1  # 重新计数
+            # TODO
+            new_fill_indices = [[], [], []]
+            for idx in range(len(fill_indices[0])):
+                if idx not in rm_indices:
+                    new_fill_indices[0].append(fill_indices[0][idx])
+                    new_fill_indices[1].append(fill_indices[1][idx])
+                    new_fill_indices[2].append(fill_indices[2][idx])
+            if isinstance(data, np.ndarray):
+                new_fill_indices[0] = np.array(new_fill_indices[0])
+                new_fill_indices[1] = np.array(new_fill_indices[1])
+                new_fill_indices[2] = np.array(new_fill_indices[2])
+            elif isinstance(data, torch.Tensor):
+                new_fill_indices[0] = torch.tensor(new_fill_indices[0]).to(data.device)
+                new_fill_indices[1] = torch.tensor(new_fill_indices[1]).to(data.device)
+                new_fill_indices[2] = torch.tensor(new_fill_indices[2]).to(data.device)
+            new_fill_indices = tuple(new_fill_indices)
+            logging.debug(f"fill_indices: {fill_indices}")
+            logging.debug(f"new_fill_indices: {new_fill_indices}")
+            fill_indices = new_fill_indices
+    
+            filled_data = self.fill_outliers(data, fill_indices)
+            if isinstance(data, np.ndarray):
+                if np.isnan(filled_data).any() or np.isinf(filled_data).any():
+                    logging.error(f"NaN or Inf values in filled data: {filled_data}")
+                    return data
+            elif isinstance(data, torch.Tensor):
+                if torch.isnan(filled_data).any() or torch.isinf(filled_data).any():
+                    logging.error(f"NaN or Inf values in filled data: {filled_data}")
+                    return data
             else:
-                consecutive_count = 1  # 重新计数
-        # TODO
-        new_fill_indices = [[], [], []]
-        for idx in range(len(fill_indices[0])):
-            if idx not in rm_indices:
-                new_fill_indices[0].append(fill_indices[0][idx])
-                new_fill_indices[1].append(fill_indices[1][idx])
-                new_fill_indices[2].append(fill_indices[2][idx])
-        new_fill_indices[0] = np.array(new_fill_indices[0])
-        new_fill_indices[1] = np.array(new_fill_indices[1])
-        new_fill_indices[2] = np.array(new_fill_indices[2])
-        new_fill_indices = tuple(new_fill_indices)
-        logging.debug(f"fill_indices: {fill_indices}")
-        logging.debug(f"new_fill_indices: {new_fill_indices}")
-        fill_indices = new_fill_indices
-
-        filled_data = self.fill_outliers(data, fill_indices)
-        if np.isnan(filled_data).any() or np.isinf(filled_data).any():
-            logging.error(f"NaN or Inf values in filled data: {filled_data}")
-            return data
+                raise ValueError(f"Unsupported data type: {type(data)}")
+        else:
+            filled_data = data
         return filled_data
 
     def post_process(self, data):
@@ -553,7 +747,13 @@ class Inputer:
         lower_bound = mean - k_sigma * std
         upper_bound = mean + k_sigma * std
         mask = (data[:, :cutoff_index] < lower_bound) | (data[:, :cutoff_index] > upper_bound)
-        fill_indices = np.where(mask)
+        if type(data) is np.ndarray:
+            fill_indices = np.where(mask)
+        elif type(data) is torch.Tensor:
+            # fill_indices = torch.nonzero(mask)
+            fill_indices = torch.where(mask)
+        else:
+            raise ValueError(f"Unsupported data type: {type(data)}")
         return fill_indices
 
     # def detect_outliers_iqr(self, data, ratio):
@@ -573,10 +773,20 @@ class Inputer:
         iqr = q3 - q1
         lower_bound = q1 - ratio * iqr
         upper_bound = q3 + ratio * iqr
+        if type(data) is torch.Tensor:
+            lower_bound = lower_bound.to(data.device)
+            upper_bound = upper_bound.to(data.device)
+        
         mask = (data[:, :cutoff_index] < lower_bound) | (data[:, :cutoff_index] > upper_bound)
-        fill_indices = np.where(mask)
+        if type(data) is np.ndarray:
+            fill_indices = np.where(mask)
+        elif type(data) is torch.Tensor:
+            # fill_indices = torch.nonzero(mask)
+            fill_indices = torch.where(mask)
+        else:
+            raise ValueError(f"Unsupported data type: {type(data)}")
         return fill_indices
-
+    
     def fill_outliers(self, data, fill_indices):
         if self.detect_method == 'none' or self.fill_method == 'none':
             return data
@@ -593,25 +803,136 @@ class Inputer:
             raise ValueError(f"Unsupported fill method: {self.fill_method}")
 
         return filled_data
+    
+    def linear_interpolate_torch(self, data, indices, normal_indices, values):
+        """
+        使用 PyTorch 实现一维线性插值。
+        :param data: 输入数据张量 (torch.Tensor)
+        :param indices: 需要插值的时间索引 (torch.Tensor)
+        :param normal_indices: 正常的时间索引 (torch.Tensor)
+        :param values: 正常时间索引对应的数据值 (torch.Tensor)
+        :return: 插值后的值
+        """
+        # 计算差值和斜率
+        delta = (normal_indices[1:] - normal_indices[:-1]).type_as(values)
+        delta_values = (values[1:] - values[:-1]) / delta
+        
+        # 计算累积差值和累积斜率
+        cumsum_delta = torch.cumsum(delta, dim=0)
+        cumsum_delta = torch.hstack([torch.zeros(1, device=data.device), cumsum_delta])
+        cumsum_values = torch.cumsum(delta_values, dim=0)
+        cumsum_values = torch.hstack([torch.zeros(1, device=data.device), cumsum_values])
+        
+        # 在正常索引中找到插值点的左侧索引
+        left_idx = torch.searchsorted(normal_indices, indices) - 1
+        left_idx[left_idx < 0] = 0
+        
+        # 获取左侧已知点的坐标和值
+        left_normal = normal_indices[left_idx]
+        left_values = values[left_idx]
+        
+        # 计算插值斜率
+        slope = delta_values[left_idx]
+        slope = torch.nan_to_num(slope)  # 避免除以零产生的 NaN
+        
+        # 计算插值结果
+        interpolated_values = left_values + slope * (indices - left_normal)
+        return interpolated_values
+    
+    def get_normal_indices(self, seq_len, indices):
+        all_indices = torch.arange(seq_len, device=indices.device)
+        mask = torch.ones_like(all_indices, dtype=torch.bool)
+        # 检查 indices 是否越界
+        valid_indices = indices[(indices >= 0) & (indices < seq_len)]
+        if valid_indices.numel() > 0:
+            mask[valid_indices] = False
+        normal_indices = all_indices[mask]
+        return normal_indices
 
     def linear_interpolate(self, data, fill_indices):
         batch_size, seq_len, feature_dim = data.shape
-        filled_data = data.copy()
-        for b in range(batch_size):
-            for f in range(feature_dim):
-                # 使用布尔索引从 fill_indices[1] 中筛选出属于当前批次 b 的时间索引
-                indices = fill_indices[1][fill_indices[0] == b]
-                if len(indices) > 0:
-                    normal_indices = np.setdiff1d(np.arange(seq_len), indices)
-                    if len(normal_indices) == 0:
-                        logging.warning(f"No normal indices for batch {b} feature {f} data: {data[b, :, f]}")
-                        continue
-                    filled_data[b, indices, f] = np.interp(indices, normal_indices, data[b, normal_indices, f])
+        if type(data) is np.ndarray:
+            filled_data = data.copy()
+        elif type(data) is torch.Tensor:
+            filled_data = data.clone()
+        else:
+            raise ValueError(f"Unsupported data type: {type(data)}")
+        if len(fill_indices) > 0:  # ! Is 'fill_indices' possible to be None?
+            for b in range(batch_size):
+                for f in range(feature_dim):
+                    # 使用布尔索引从 fill_indices[1] 中筛选出属于当前批次 b 的时间索引
+                    if isinstance(data, np.ndarray):
+                        indices = fill_indices[1][fill_indices[0] == b]
+                    elif isinstance(data, torch.Tensor):
+                        # import pdb; pdb.set_trace()
+                        indices = fill_indices[1][fill_indices[0] == b]
+                    else:
+                        raise ValueError(f"Unsupported data type: {type(data)}")
+                    if len(indices) > 0:
+                        
+                        if type(data) is np.ndarray:
+                            normal_indices = np.setdiff1d(np.arange(seq_len), indices)
+                            if len(normal_indices) == 0:
+                                logging.warning(f"No normal indices for batch {b} feature {f} data: {data[b, :, f]}")
+                                continue
+                            filled_data[b, indices, f] = np.interp(indices, normal_indices, data[b, normal_indices, f])
+                        elif type(data) is torch.Tensor:
+                            # import pdb; pdb.set_trace()
+                            # normal_indices = self.get_normal_indices(seq_len, indices).to(data.device)
+                            # values = data[b, normal_indices, f].type(torch.float32).to(data.device)
+                            # if len(normal_indices) == 0:
+                            #     logging.warning(f"No normal indices for batch {b} feature {f} data: {data[b, :, f]}")
+                            #     continue
+                            # filled_data[b, indices, f] = self.linear_interpolate_torch(
+                            #     data,
+                            #     indices,
+                            #     normal_indices,
+                            #     values
+                            # )
+                            normal_indices = self.get_normal_indices(seq_len, indices)
+                            if normal_indices.numel() == 0:
+                                logging.warning(f"No normal indices for batch {b} feature {f} data: {data[b, :, f]}")
+                                return data[b, :, f]
+                            
+                            # 线性插值的输入
+                            x = normal_indices.to(torch.float32)
+                            y = data[b, normal_indices, f].to(torch.float32)
+                            x_new = indices.to(torch.float32)
+                            
+                            # 线性插值实现
+                            def interp_torch(x_new, x, y):
+                                """
+								自定义的 PyTorch 线性插值函数
+								"""
+                                ind = torch.searchsorted(x, x_new)
+                                ind = torch.clamp(ind, 1, x.numel() - 1)
+                                lo = ind - 1
+                                hi = ind
+                                dx = x[hi] - x[lo]
+                                dy = y[hi] - y[lo]
+                                slope = dy / dx
+                                return y[lo] + slope * (x_new - x[lo])
+                            
+                            interpolated_values = interp_torch(x_new, x, y)
+                            filled_data = data.clone()
+                            filled_data[b, indices, f] = interpolated_values
+                            return filled_data
+                        
+                        else:
+                            raise ValueError(f"Unsupported data type: {type(data)}")
+        else:
+            filled_data = data
+                        
         return filled_data
-
+    
     def rolling_mean(self, data, fill_indices):
         window_size = 1000  # FIXME: magic number
-        filled_data = data.copy()
+        if type(data) is np.ndarray:
+            filled_data = data.copy()
+        elif type(data) is torch.Tensor:
+            filled_data = data.clone()
+        else:
+            raise ValueError(f"Unsupported data type: {type(data)}")
         batch_size, seq_len, feature_dim = data.shape
         for b in range(batch_size):
             for f in range(feature_dim):
@@ -622,11 +943,21 @@ class Inputer:
                     neighbors = data[b, start:end, f]
                     valid_neighbors = neighbors[neighbors != 0]
                     if len(valid_neighbors) > 0:
-                        filled_data[b, idx, f] = np.mean(valid_neighbors)
+                        if type(data) is np.ndarray:
+                            filled_data[b, idx, f] = np.mean(valid_neighbors)
+                        elif type(data) is torch.Tensor:
+                            filled_data[b, idx, f] = torch.mean(valid_neighbors)
+                        else:
+                            raise ValueError(f"Unsupported data type: {type(data)}")
         return filled_data
 
     def forward_fill(self, data, fill_indices):
-        filled_data = data.copy()
+        if type(data) is np.ndarray:
+            filled_data = data.copy()
+        elif type(data) is torch.Tensor:
+            filled_data = data.clone()
+        else:
+            raise ValueError(f"Unsupported data type: {type(data)}")
         batch_size, seq_len, feature_dim = data.shape
         for b in range(batch_size):
             for f in range(feature_dim):
@@ -639,7 +970,12 @@ class Inputer:
         return filled_data
 
     def backward_fill(self, data, fill_indices):
-        filled_data = data.copy()
+        if type(data) is np.ndarray:
+            filled_data = data.copy()
+        elif type(data) is torch.Tensor:
+            filled_data = data.clone()
+        else:
+            raise ValueError(f"Unsupported data type: {type(data)}")
         batch_size, seq_len, feature_dim = data.shape
         for b in range(batch_size):
             for f in range(feature_dim):
@@ -664,7 +1000,7 @@ class Warper:
         self.clip_factor = float(clip_factor) if clip_factor != 'none' else nan_inf_clip_factor
 
     def pre_process(self, data):
-        assert data.ndim == 3, f'Invalid data shape: {data.shape}'
+        assert len(data.shape)==3, f'Invalid data shape: {data.shape}'
         if self.method == 'none':
             return data
 
@@ -672,27 +1008,55 @@ class Warper:
         self.data_in = data
 
         if self.method == 'log':
-            min_values = np.min(data, axis=1, keepdims=True)
-            self.shift_values = np.where(min_values <= 1, 1 - min_values, 0)
-            data_shifted = data + self.shift_values
-            res = np.log(data_shifted)
-
+            if isinstance(data, np.ndarray):
+                min_values = np.min(data, axis=1, keepdims=True)
+                self.shift_values = np.where(min_values <= 1, 1 - min_values, 0)
+                data_shifted = data + self.shift_values
+                res = np.log(data_shifted)
+            elif isinstance(data, torch.Tensor):
+                min_values = torch.min(data, dim=1, keepdim=True).values
+                self.shift_values = torch.where(min_values <= 1, 1 - min_values, torch.tensor(0., dtype=data.dtype, device=data.device))
+                data_shifted = data + self.shift_values
+                res = torch.log(data_shifted)
+            else:
+                raise ValueError(f"Unsupported data type: {type(data)}")
+        
         elif self.method == 'sqrt':
-            min_values = np.min(data, axis=1, keepdims=True)
-            self.shift_values = np.where(min_values < 0, 1 - min_values, 0)
-            data_shifted = data + self.shift_values
-            res = np.sqrt(data_shifted)
+            if isinstance(data, np.ndarray):
+                min_values = np.min(data, axis=1, keepdims=True)
+                self.shift_values = np.where(min_values < 0, 1 - min_values, 0)
+                data_shifted = data + self.shift_values
+                res = np.sqrt(data_shifted)
+            elif isinstance(data, torch.Tensor):
+                min_values = torch.min(data, dim=1, keepdim=True).values
+                zero_tensor = torch.tensor(0., dtype=data.dtype, device=data.device)
+                self.shift_values = torch.where(min_values < 0, 1 - min_values, zero_tensor)
+                data_shifted = data + self.shift_values
+                res = torch.sqrt(data_shifted)
+            else:
+                raise ValueError(f"Unsupported data type: {type(data)}")
         else:
             raise Exception('Invalid warper method: {}'.format(self.method))
+        
+        assert len(res.shape) == len(data.shape), f'Invalid data shape: {res.shape}'
+        if isinstance(res, np.ndarray):
+            assert np.isnan(res).sum() == 0 and np.isinf(res).sum() == 0, \
+                f'Invalid data: {res}, method: {self.method}'
 
-        assert res.ndim == data.ndim, f'Invalid data shape: {res.shape}'
-        assert np.isnan(res).sum() == 0 and np.isinf(res).sum() == 0, \
-            f'Invalid data: {res}, method: {self.method}'
-
-        if np.isnan(res).any() or np.isinf(res).any():
-            logging.error(f"NaN or Inf values in transformed data: {res}")
-            self.fail = True
-            return data
+            if np.isnan(res).any() or np.isinf(res).any():
+                logging.error(f"NaN or Inf values in transformed data: {res}")
+                self.fail = True
+                return data
+        elif isinstance(res, torch.Tensor):
+            assert torch.isnan(res).sum() == 0 and torch.isinf(res).sum() == 0, \
+                f'Invalid data: {res}, method: {self.method}'
+            
+            if torch.isnan(res).any() or torch.isinf(res).any():
+                logging.error(f"NaN or Inf values in transformed data: {res}")
+                self.fail = True
+                return data
+        else:
+            raise ValueError(f"Unsupported data type: {type(res)}")
         return res
 
     def post_process(self, data):
@@ -703,22 +1067,39 @@ class Warper:
             return data
 
         if self.method == 'log':
-            _data = np.exp(data)
+            if isinstance(data, np.ndarray):
+                _data = np.exp(data)
+            elif isinstance(data, torch.Tensor):
+                _data = torch.exp(data)
+            else:
+                raise ValueError(f"Unsupported data type: {type(data)}")
             data_restored = _data - self.shift_values
 
         elif self.method == 'sqrt':
-            data_restored = np.square(data)
+            if isinstance(data, np.ndarray):
+                data_restored = np.square(data)
+            elif isinstance(data, torch.Tensor):
+                data_restored = torch.square(data)
+            else:
+                raise ValueError(f"Unsupported data type: {type(data)}")
             data_restored = data_restored - self.shift_values
 
         else:
             raise Exception('Invalid warper method: {}'.format(self.method))
 
         res = data_restored
-        if np.isnan(res).any() or np.isinf(res).any():
-            logging.error(f"NaN or Inf values in restored data: {res}")
-            res = my_clip(self.data_in, res, nan_inf_clip_factor=5)  # 表示出结果很差
-        elif self.clip_factor is not None:
-            res = my_clip(self.data_in, res, min_max_clip_factor=self.clip_factor)  # 要求严格
+        if isinstance(data, np.ndarray):
+            if np.isnan(res).any() or np.isinf(res).any():
+                logging.error(f"NaN or Inf values in restored data: {res}")
+                res = my_clip(self.data_in, res, nan_inf_clip_factor=5)  # 表示出结果很差
+            elif self.clip_factor is not None:
+                res = my_clip(self.data_in, res, min_max_clip_factor=self.clip_factor)  # 要求严格
+        elif isinstance(data, torch.Tensor):
+            if torch.isnan(res).any() or torch.isinf(res).any():
+                logging.error(f"NaN or Inf values in restored data: {res}")
+                res = my_clip(self.data_in, res, nan_inf_clip_factor=5)  # 表示出结果很差
+            elif self.clip_factor is not None:
+                res = my_clip(self.data_in, res, min_max_clip_factor=self.clip_factor)  # 要求严格
         return res
 
 
@@ -744,7 +1125,12 @@ class Differentiator:  # 能预测趋势啦，但是误差累计很严重，短�
 
         for _ in range(self.n):
             self.history_diff_data.append(diff_data[:, 0:1, :])  # 记录差分前的第一个值
-            diff_data = np.diff(diff_data, axis=1)
+            if isinstance(data, np.ndarray):
+                diff_data = np.diff(diff_data, axis=1)
+            elif isinstance(data, torch.Tensor):
+                diff_data = torch.diff(diff_data, dim=1)
+            else:
+                raise ValueError(f"Unsupported data type: {type(data)}")
         self.diff_data = diff_data
 
         aligner = Aligner('data_patch', 'zero_pad', time, time)  # FIXME
@@ -756,28 +1142,53 @@ class Differentiator:  # 能预测趋势啦，但是误差累计很严重，短�
             return data
 
         batch, time, feature = data.shape
-
-        inv_diff_data_total = np.concatenate([self.diff_data, data], axis=1)
-        for i in range(self.n - 1, -1, -1):
-            inv_diff_data_total = np.concatenate([self.history_diff_data[i], inv_diff_data_total], axis=1)
-            inv_diff_data_total = np.cumsum(inv_diff_data_total, axis=1)
-
-        pre_time = self.diff_data.shape[1]
-        assert pre_time + time + self.n == inv_diff_data_total.shape[1], \
-            f"{pre_time} + {self.n} + {time} != {inv_diff_data_total.shape[1]}"
-        inv_diff_data = inv_diff_data_total[:, pre_time:pre_time + time, :]
-
-        # 填充大于最大值和小于最小值的数据，避免数值爆炸（log
-        # inv_diff_data[inv_diff_data > self.max * 2] = self.max
-        # inv_diff_data[inv_diff_data < self.min * 2] = self.min
-
-        res = inv_diff_data
-        # IQR-variant
-        if np.isnan(res).any() or np.isinf(res).any():
-            logging.error(f"NaN or Inf values in restored data: {res}")
-            res = my_clip(self.data_in, res, nan_inf_clip_factor=nan_inf_clip_factor)  # 表示出结果很差
-        elif self.clip_factor is not None:
-            res = my_clip(self.data_in, res, min_max_clip_factor=self.clip_factor)  # 要求严格
+        
+        if isinstance(data, np.ndarray):
+            inv_diff_data_total = np.concatenate([self.diff_data, data], axis=1)
+            for i in range(self.n - 1, -1, -1):
+                inv_diff_data_total = np.concatenate([self.history_diff_data[i], inv_diff_data_total], axis=1)
+                inv_diff_data_total = np.cumsum(inv_diff_data_total, axis=1)
+    
+            pre_time = self.diff_data.shape[1]
+            assert pre_time + time + self.n == inv_diff_data_total.shape[1], \
+                f"{pre_time} + {self.n} + {time} != {inv_diff_data_total.shape[1]}"
+            inv_diff_data = inv_diff_data_total[:, pre_time:pre_time + time, :]
+    
+            # 填充大于最大值和小于最小值的数据，避免数值爆炸（log
+            # inv_diff_data[inv_diff_data > self.max * 2] = self.max
+            # inv_diff_data[inv_diff_data < self.min * 2] = self.min
+    
+            res = inv_diff_data
+            # IQR-variant
+            if np.isnan(res).any() or np.isinf(res).any():
+                logging.error(f"NaN or Inf values in restored data: {res}")
+                res = my_clip(self.data_in, res, nan_inf_clip_factor=nan_inf_clip_factor)  # 表示出结果很差
+            elif self.clip_factor is not None:
+                res = my_clip(self.data_in, res, min_max_clip_factor=self.clip_factor)  # 要求严格
+        elif isinstance(data, torch.Tensor):
+            inv_diff_data_total = torch.cat([self.diff_data, data], dim=1)
+            for i in range(self.n - 1, -1, -1):
+                inv_diff_data_total = torch.cat([self.history_diff_data[i], inv_diff_data_total], dim=1)
+                inv_diff_data_total = torch.cumsum(inv_diff_data_total, dim=1)
+            
+            pre_time = self.diff_data.shape[1]
+            assert pre_time + time + self.n == inv_diff_data_total.shape[1], \
+                f"{pre_time} + {self.n} + {time} != {inv_diff_data_total.shape[1]}"
+            inv_diff_data = inv_diff_data_total[:, pre_time:pre_time + time, :]
+            
+            # 填充大于最大值和小于最小值的数据，避免数值爆炸（log
+            # inv_diff_data[inv_diff_data > self.max * 2] = self.max
+            # inv_diff_data[inv_diff_data < self.min * 2] = self.min
+            
+            res = inv_diff_data
+            # IQR-variant
+            if torch.isnan(res).any() or torch.isinf(res).any():
+                logging.error(f"NaN or Inf values in restored data: {res}")
+                res = my_clip(self.data_in, res, nan_inf_clip_factor=1.0)  # 表示出结果很差
+            elif self.clip_factor is not None:
+                res = my_clip(self.data_in, res, min_max_clip_factor=self.clip_factor)  # 要求严格
+        else:
+            raise ValueError(f"Invalid data type: {type(data)}")
         return res
 
 
@@ -806,14 +1217,28 @@ class Denoiser:
 
     def moving_average(self, data):
         window_size = self.window_size
-        kernel = np.ones(window_size) / window_size
-        smoothed_data = np.apply_along_axis(lambda m: np.convolve(m, kernel, mode='same'), axis=1, arr=data)
+        if isinstance(data, np.ndarray):
+            kernel = np.ones(window_size) / window_size
+            smoothed_data = np.apply_along_axis(lambda m: np.convolve(m, kernel, mode='same'), axis=1, arr=data)
+        elif isinstance(data, torch.Tensor):
+            kernel = torch.ones(window_size, dtype=data.dtype, device=data.device) / window_size
+            kernel = kernel.unsqueeze(0).unsqueeze(0)
+            data = data.unsqueeze(1)
+            smoothed_data = torch.nn.functional.conv1d(data, kernel, padding=window_size // 2)
+            smoothed_data = smoothed_data.squeeze(1)
+        else:
+            raise ValueError(f"Invalid data type: {type(data)}")
         return smoothed_data
 
     def ewma(self, data):
         alpha = self.alpha
         batch, time, feature = data.shape
-        smoothed_data = np.zeros_like(data)
+        if isinstance(data, np.ndarray):
+            smoothed_data = np.zeros_like(data)
+        elif isinstance(data, torch.Tensor):
+            smoothed_data = torch.zeros_like(data)
+        else:
+            raise ValueError(f"Invalid data type: {type(data)}")
         smoothed_data[:, 0, :] = data[:, 0, :]  # Initialize with the first value
 
         for t in range(1, time):
@@ -822,10 +1247,19 @@ class Denoiser:
 
     def _apply_median_filter(self, data, window_size):
         pad_size = window_size // 2
-        padded_data = np.pad(data, pad_size, mode='edge')
-        smoothed_data = np.zeros_like(data)
-        for i in range(len(data)):
-            smoothed_data[i] = np.median(padded_data[i:i + window_size])
+        if isinstance(data, np.ndarray):
+            padded_data = np.pad(data, pad_size, mode='edge')
+            smoothed_data = np.zeros_like(data)
+            for i in range(len(data)):
+                smoothed_data[i] = np.median(padded_data[i:i + window_size])
+        elif isinstance(data, torch.Tensor):
+            padded_data = torch.nn.functional.pad(data, (pad_size, pad_size), mode='replicate')
+            smoothed_data = torch.zeros_like(data)
+            for i in range(data.size(0)):
+                # 使用 torch.median 计算中位数
+                smoothed_data[i], _ = torch.median(padded_data[i:i + window_size], dim=0)
+        else:
+            raise ValueError(f"Invalid data type: {type(data)}")
         return smoothed_data
 
     # def low_pass_filter(self, data, cutoff=0.1, fs=1.0):
@@ -836,15 +1270,33 @@ class Denoiser:
     def fft_filter(self, data):
         percentile = 80
         batch, time, feature = data.shape
-        denoised_data = np.zeros_like(data)
-
-        for b in range(batch):
-            for f in range(feature):
-                fft_coeffs = np.fft.fft(data[b, :, f])
-                magnitudes = np.abs(fft_coeffs)
-                upper_magnitude = np.percentile(magnitudes, percentile)
-                fft_coeffs[magnitudes < upper_magnitude] = 0 + 0j
-                denoised_data[b, :, f] = np.fft.ifft(fft_coeffs).real
+        if isinstance(data, np.ndarray):
+            denoised_data = np.zeros_like(data)
+    
+            for b in range(batch):
+                for f in range(feature):
+                    fft_coeffs = np.fft.fft(data[b, :, f])
+                    magnitudes = np.abs(fft_coeffs)
+                    upper_magnitude = np.percentile(magnitudes, percentile)
+                    fft_coeffs[magnitudes < upper_magnitude] = 0 + 0j
+                    denoised_data[b, :, f] = np.fft.ifft(fft_coeffs).real
+        elif isinstance(data, torch.Tensor):
+            denoised_data = torch.zeros_like(data)
+            
+            for b in range(batch):
+                for f in range(feature):
+                    # 进行快速傅里叶变换
+                    fft_coeffs = torch.fft.fft(data[b, :, f])
+                    # 计算傅里叶系数的幅值
+                    magnitudes = torch.abs(fft_coeffs)
+                    # 计算指定百分位数对应的幅值
+                    upper_magnitude = torch.quantile(magnitudes, percentile / 100)
+                    # 将低于该幅值的傅里叶系数置为零
+                    fft_coeffs[magnitudes < upper_magnitude] = torch.tensor(0 + 0j, dtype=fft_coeffs.dtype, device=fft_coeffs.device)
+                    # 进行逆快速傅里叶变换并取实部
+                    denoised_data[b, :, f] = torch.fft.ifft(fft_coeffs).real
+        else:
+            raise ValueError(f"Invalid data type: {type(data)}")
         return denoised_data
 
     def post_process(self, data):

@@ -311,14 +311,265 @@ def train_or_test_or_val(
     return pd_data
 
 
-def main(data_name, model_name, target_column, pred_len, res_dir, device):
-    model = get_model(model_name, device)
+def train_or_test_or_val_cov(
+        patch_len, pred_len, max_seq_len,  # 相对固定
+        model, dataset, target_column, mode, num_sample,  # 相对固定
+        augmentor, batch_sizes,  # 新增的参数!!!!!!!!!
+        params_space, tuner, pruner_report_mode, pruner_metric_mode, num_params, terminator_manager: TerminatorManager,
+        pd_data, res_dir,  # 可变
+        tr: TimeRecorder
+):
+    logging.info("###############################################")
+    logging.info(f"Begin to {mode}...")
+    
+    mode_for_data = 'train' if mode != 'test' else 'test'  # !!!!!!!! val模式使用的是train的data！！！！
+    
+    custom_dataset = CustomDatasetCov(dataset, mode_for_data, target_column, max_seq_len, pred_len, augmentor,
+                                      num_sample)
+    
+    # dataloader = DataLoader(custom_dataset, batch_size=batch_size, shuffle=False)  # FIXME: 按道理test的batch_size=1但是太慢
+    batch_sampler = DynamicBatchSampler(custom_dataset, batch_sizes)  # 动态的batch_size
+    dataloader = DataLoader(custom_dataset, batch_sampler=batch_sampler)
+    
+    standard_scaler = dataset.get_mode_scaler(mode_for_data, 'standard', target_column)
+    original_aug_method = list(augmentor.aug_method_dict.keys())[augmentor.aug_idx]
+    
+    bar1 = tqdm(range(num_params), desc='Processing Params', ncols=100) \
+        if mode != 'test' else range(num_params)
+    for _ in bar1:
+        print()
+        param_dict = tuner.ask()
+        logging.info(f"param_dict={param_dict}")
+        
+        max_step_idx = len(dataloader) - 1
+        augmentor.reset_aug_method(original_aug_method)  # 确保不同param_dict下的同一数据的augment方法一致
+        if mode == 'test':
+            assert original_aug_method == 'none', f"original_aug_method={original_aug_method}"
+            assert augmentor.mode == 'fix', f"augmentor.mode={augmentor.mode}"
+        
+        should_prune = False
+        batch_mse_list = []  # !!!!!! 存储当前param_dict的mse列表，无论是否被prune都计算的全split_idx的mse
+        bar2 = tqdm(enumerate(dataloader), desc='Processing Split Idxes', ncols=100, total=len(dataloader)) \
+            if mode == 'test' else enumerate(dataloader)
+        for step_idx, (split_idxes, aug_methods, historys, labels, cov_historys, cov_labels) in bar2:
+            assert should_prune is False, "should_prune should be False at the beginning of each split_idx loop"
+            print() if mode == 'test' else None
+            logging.info(f"{split_idxes.shape=}, {historys.shape=}, {labels.shape=}, {cov_historys.shape=}, {cov_labels.shape=}")
+            logging.info(f"step ratio: {step_idx + 1}/{max_step_idx + 1}")
+            
+            # aug产生的四维数据 batch_size,aug,time,feature -> 合并前两维并限制 shape[0] 不超过800
+            assert len(historys.shape) == 4 and len(labels.shape) == 4, \
+                f"historys.shape={historys.shape}, labels.shape={labels.shape}"
+            if mode == 'test':  # test 可不能有非none的aug
+                assert historys.shape[1] == 1, f"historys.shape[1]={historys.shape[1]}"  # no aug for test
+            
+            # transpose: batch,aug,time,feature -> aug,batch,time,feature (靠前的aug更重要->none (真不是！！！均衡更重要！！！
+            # historys = historys.permute(1, 0, 2, 3)
+            # labels = labels.permute(1, 0, 2, 3)
+            
+            historys = historys.reshape(-1, historys.shape[2], historys.shape[3])
+            labels = labels.reshape(-1, labels.shape[2], labels.shape[3])
+            cov_historys = cov_historys.reshape(-1, cov_historys.shape[2], cov_historys.shape[3])
+            cov_labels = cov_labels.reshape(-1, cov_labels.shape[2], cov_labels.shape[3])
+            
+            # max_batch_size
+            max_batch_size_for_mode = 1000 if mode == 'train' else np.inf  # FIXME: 1000 for train fast for Uni2ts
+            max_batch_size_for_cuda = get_max_batch_size_for_cuda(model.model_name)
+            max_batch_size = min(max_batch_size_for_mode, max_batch_size_for_cuda)
+            logging.info(f"max_batch_size_for_cuda={max_batch_size_for_cuda}")
+            if mode == 'test':  # test 可不能被截断
+                assert historys.shape[0] <= max_batch_size_for_cuda, f"historys.shape[0]={historys.shape[0]}"
+            # train/val 只选择最多max_batch_size个样本（均匀选取，保证每个params给到idx的相同
+            if historys.shape[0] > max_batch_size:  # FIXME: 配合prune的step
+                # logging.info(f"historys.shape[0]={historys.shape[0]}")
+                # selected_idxes = np.linspace(0, historys.shape[0] - 1, max_batch_size, dtype=int)
+                # historys = historys[selected_idxes]
+                # labels = labels[selected_idxes]
+                historys, labels = historys[:max_batch_size], labels[:max_batch_size]
+                cov_historys, cov_labels = cov_historys[:max_batch_size], cov_labels[:max_batch_size]
+                split_idxes, aug_methods = split_idxes[:max_batch_size], aug_methods[:max_batch_size]
+            actual_batch_size = historys.shape[0]
+            logging.debug(f"aug_methods={aug_methods}")
+            
+            # 转化成numpy
+            historys, labels = historys.numpy(), labels.numpy()
+            cov_historys, cov_labels = cov_historys.numpy(), cov_labels.numpy()
+            
+            # 用 adaptive_infer 推理
+            t_infer = time_start()
+            kwargs = param_dict.copy()
+            kwargs = ablation_substitute(kwargs)
+            kwargs.update({'history_seqs': historys, 'cov_history_seqs': cov_historys, 'model': model, 'dataset': dataset,
+                           'target_column': target_column, 'patch_len': patch_len, 'pred_len': pred_len, 'mode': mode,
+                           'pipeline_name': 'infer_cov'})
+            preds, process_dur, model_dur = adaptive_infer(**kwargs)
+            log_time_delta(t_infer, "infer")
+            
+            # 如果有nan或inf则clip
+            if np.isnan(preds).any() or np.isinf(preds).any():
+                my_clip(historys, preds, nan_inf_clip_factor=nan_inf_clip_factor)
+            
+            t_metric = time_start()
+            # 标准化处理
+            _preds = standard_scaler.transform(preds.reshape(-1, 1)).reshape(preds.shape)
+            _labels = standard_scaler.transform(labels.reshape(-1, 1)).reshape(labels.shape)
+            
+            # 计算该batch全量split_idx的指标->多batch的mean给tuner做final
+            mae, mse, rmse, mape, mspe = metric(_preds, _labels)
+            batch_mse_list.append(mse)
+            
+            # 计算指标
+            # tr.time_end() if tr is not None and mode == 'test' else None  # test不需要计算这部分 每个split的结果还是要记的
+            if pruner_report_mode == 'batch':
+                # mae, mse, rmse, mape, mspe = metric(_preds, _labels) # 沿用上面的
+                index_str = str(len(pd_data)).zfill(5)
+                result_dict = {**param_dict, 'split_idx': str(split_idxes.tolist()), 'idx': index_str, 'mode': mode,
+                               'mae': mae, 'mse': mse, 'rmse': rmse, 'mape': mape, 'mspe': mspe, 'aug_method': 'mix'}
+                pd_data.loc[len(pd_data)] = result_dict
+                logging.info(f"cur_mse={mse}")
+                
+                if mode != 'test':  # !!!
+                    _mse = mse if pruner_metric_mode == 'cur' \
+                        else find_result_by_param_dict(pd_data, mode, params_space, param_dict)['mse']
+                    tuner.report(param_dict, _mse, step_idx)
+                    logging.info(f"{pruner_metric_mode}_mse={_mse}")
+                    if step_idx != max_step_idx and tuner.should_prune(param_dict):
+                        logging.info(f"Prune at step_idx={step_idx} with {pruner_metric_mode}_mse={_mse}")
+                        should_prune = True
+            elif pruner_report_mode == 'single':
+                assert len(batch_sizes) == 1, "single report mode only support single batch size"
+                # batch_results = [None] * len(split_idxes)  # 也不一定就比原生写pd快 FIXME:
+                # FIXME: actual_batch_size才是真实的batch_size，不然会出现空的nan的数据条目
+                # ps:（如果还有考虑all的aug方法重复split_idx就太麻烦了。。。（重复好像也没事，一条新记录
+                batch_results = [None] * actual_batch_size
+                for i in range(actual_batch_size):
+                    split_idx = split_idxes[i]
+                    # FIXME: 决定被prune但已经计算出后面split_idx的metric要不要记录影响后续prune难度(影响选top
+                    # 。。。 break会少了记录？，但是不break跟原来batch的选top逻辑就一样了
+                    if should_prune:
+                        break
+                    mae, mse, rmse, mape, mspe = metric(_preds[i:i + 1], _labels[i:i + 1])
+                    aug_method = aug_methods[i]
+                    index_str = str(len(pd_data) + i).zfill(5)
+                    result_dict = {**param_dict, 'split_idx': str([int(split_idx)]), 'idx': index_str, 'mode': mode,
+                                   'mae': mae, 'mse': mse, 'rmse': rmse, 'mape': mape, 'mspe': mspe,
+                                   'aug_method': aug_method}
+                    batch_results[i] = result_dict
+                    if mode != 'test':
+                        _mse = mse  # 不支持mean，分离读写场景下有点复杂
+                        tuner.report(param_dict, _mse, i)
+                        # logging.debug(f"{pruner_metric_mode}_mse={_mse}")
+                        if tuner.should_prune(param_dict):
+                            logging.info(f"Prune at step_idx={step_idx} split_idx={split_idx} "
+                                         f"with {pruner_metric_mode}_mse={_mse}")
+                            should_prune = True
+                valid_batch_results = [result for result in batch_results if result]
+                # logging.debug(f"valid_batch_results={valid_batch_results}")
+                # cat会导致外部pd_data跟内部不一致！
+                pd_data = pd.concat([pd_data, pd.DataFrame(valid_batch_results)], ignore_index=True)
+                # # # 使用 loc 方法批量插入数据
+                # # pd_data.loc[len(pd_data)] = result_dict
+                # pd_data.loc[len(pd_data):len(pd_data) + len(valid_batch_results)] = pd.DataFrame(valid_batch_results)
+            else:
+                raise ValueError(f"Unknown pruner_report_mode: {pruner_report_mode}")
+            log_time_delta(t_metric, "metric")
+            
+            # if step == max_step and mode != 'train':
+            cur_batch_size = len(split_idxes)
+            
+            selected_split_idx_num = 0
+            if mode == 'val':
+                selected_split_idx_num = 1
+            if mode == 'test':  # 每个batch有多次对比
+                selected_split_idx_num = 1  # 参考data画图和以前的pdf数据吧
+            # 平均选取
+            selected_split_idx_num = min(selected_split_idx_num, cur_batch_size)
+            selected_batch_idxes = np.linspace(0, cur_batch_size - 1, selected_split_idx_num, dtype=int) \
+                if selected_split_idx_num != 0 else []
+            # [45210] [45354] weather
+            # FIXME: 补充画图的split_idx
+            if mode == 'test':
+                if data_name == 'Weather':
+                    selected_batch_idxes = list(selected_batch_idxes)
+                    if 45210 in split_idxes:
+                        selected_batch_idxes.append(np.where(split_idxes == 45210)[0][0])
+                    if 45354 in split_idxes:
+                        selected_batch_idxes.append(np.where(split_idxes == 45354)[0][0])
+                    selected_batch_idxes = np.array(selected_batch_idxes)
+                if data_name == 'Traffic':  # [15832]
+                    selected_batch_idxes = list(selected_batch_idxes)
+                    if 15832 in split_idxes:
+                        selected_batch_idxes.append(np.where(split_idxes == 15832)[0][0])
+                    selected_batch_idxes = np.array(selected_batch_idxes)
+            tr.time_end() if tr is not None else None
+            for i in selected_batch_idxes:
+                seq = historys[i, -3 * pred_len:, 0]
+                pred = preds[i, :, 0]
+                label = labels[i, :, 0]
+                pred_line = np.concatenate((seq, pred), axis=0)
+                label_line = np.concatenate((seq, label), axis=0)
+                plt.figure(figsize=(ceil(len(label_line) / patch_len) * 5, 5))
+                plt.plot(pred_line, label="pred", linestyle='--', color='blue')
+                plt.plot(label_line, label="label", linestyle='-', color='orange')
+                plt.legend()
+                # 同一个样本的不同处理方式 方便比较
+                plt.savefig(os.path.join(res_dir, mode, f'{split_idxes.tolist()[i]}-{index_str}.pdf'),
+                            bbox_inches='tight')
+            tr.time_start() if tr is not None else None
+            if should_prune:
+                break
+        
+        # FIXME：无论是否被prune，都要告诉tuner这个param_dict已经结束了，有点问题。。。mse； Ok:在筛选top1时会考虑max_step
+        # FIXME: 这里的mean_mse在prune后不是在所有的split_idx上计算的！！！
+        # FIXME：更高保真的mean_mse计算方式 -> 所有过去历史batch的全量split_idx的mse的mean
+        # 不真实的mse->对TPE影响较大（单batch用batch_mse_list则不受坏影响
+        if should_prune:
+            final_mse = np.mean(batch_mse_list)
+        else:
+            final_mse = find_result_by_param_dict(pd_data, mode, params_space, param_dict)['mse']
+        tuner.tell(param_dict, final_mse)
+        logging.info(f"final_mse={final_mse}")
+        terminate_flag = terminator_manager.update_and_check(final_mse, should_prune) \
+            if terminator_manager is not None else False
+        
+        # # FIXME: 尝试用better_percent替代！！！！！！！！！intermediate怎么办... cur不好弄
+        # better_percent_mse = calc_better_draw_percent(pd_data, mode, ['mse'], get_params_space_and_org()[1],
+        #                                               param_dict)['better_percent_mse']
+        # logging.info(f"better_percent_mse={better_percent_mse}")
+        # tuner.tell(param_dict, better_percent_mse)
+        # terminate_flag = terminator_manager.update_and_check(0, should_prune) \
+        #     if terminator_manager is not None else False
+        # terminate_flag = False
+        
+        if terminate_flag:
+            logging.info(f"Experiment terminated by terminator!")
+            break
+    tr.time_end() if tr is not None else None
+    t = time_start()
+    pd_data.to_csv(os.path.join(res_dir, 'pd_data.csv'))
+    grouped_cols = list(params_space.keys()) + ['mae', 'mse', 'rmse', 'mape', 'mspe'] + ['split_idx', 'idx']
+    agg_dict = {'mae': 'mean', 'mse': 'mean', 'rmse': 'mean', 'mape': 'mean', 'mspe': 'mean',
+                'split_idx': 'last', 'idx': 'last'}
+    data_grouped_by_params = pd_data[pd_data['mode'] == mode][grouped_cols] \
+        .groupby(list(params_space.keys())).agg(agg_dict).reset_index()
+    # 没有区分prune，但是后续是pd_data再算top...
+    data_grouped_by_params.to_csv(os.path.join(res_dir, f'_{mode}_data_grouped_by_params.csv'))
+    log_time_delta(t, f"save {mode} data_grouped_by_params")
+    tr.time_start() if tr is not None else None
+    return pd_data
+
+
+def main(data_name, model_name, target_column, pred_len, res_dir, device, args=None):
+    model = get_model(model_name, device, args)
     dataset = get_dataset(data_name)
 
     pred_len = pred_len
     min_trimmer_seq_len = ceil(pred_len / patch_len) * patch_len
-
+    
+    # ? Add choose logic to select covariate use
+    # params_space, origin_param_dict = get_params_space_and_org_cov()
     params_space, origin_param_dict = get_params_space_and_org()
+    
     logging.info(f"params_space={params_space}")
     logging.info(f"origin_param_dict={origin_param_dict}")
 
@@ -454,6 +705,13 @@ def main(data_name, model_name, target_column, pred_len, res_dir, device):
     train_pruner_report_mode = 'single'  # 'single', 'batch' # FIXME
     train_pruner_metric_mode = 'cur'  # 'mean', 'cur' # FIXME
     # 开始训练！（适配）
+    # ? Add choose logic to select covariate using
+    # pd_data = train_or_test_or_val_cov(patch_len, pred_len, max_seq_len,
+    #                                model, dataset, target_column, mode, num_train_sample, train_augmentor,
+    #                                train_batch_sizes,
+    #                                params_space, train_tuner, train_pruner_report_mode, train_pruner_metric_mode,
+    #                                max_num_params, terminator_manager,
+    #                                pd_data, res_dir, tr_adapt)
     pd_data = train_or_test_or_val(patch_len, pred_len, max_seq_len,
                                    model, dataset, target_column, mode, num_train_sample, train_augmentor,
                                    train_batch_sizes,
@@ -563,7 +821,77 @@ def main(data_name, model_name, target_column, pred_len, res_dir, device):
         # val_top1_param_dict = find_top_param_dict_list(pd_data, 'train', params_space, 1, metric_weight_dict_for_test,
         #                                                res_dir)[0]
 
-    logging.info(f"val_top1_param_dict={val_top1_param_dict}")
+    logging.info(f"val_top1_param_dict={val_top1_param_dict}")#! This is the Best Preprocess Technique
+    if 'Timer' in model_name:
+        from Timer.exp.exp_large_few_shot_roll_demo import Exp_Large_Few_Shot_Roll_Demo
+        Exp = Exp_Large_Few_Shot_Roll_Demo
+        from pipeline import Process
+        process = Process(model, dataset, val_top1_param_dict)
+        # setting record of experiments
+        print('Args in experiment:')
+        print(args)
+        if args.is_finetuning:
+            for ii in range(args.itr):
+                # setting record of experiments
+                setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_predl{}_patchl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}'.format(
+                    args.task_name,
+                    args.model_id,
+                    args.model,
+                    args.data,
+                    args.features,
+                    args.seq_len,
+                    args.label_len,
+                    args.pred_len,
+                    args.patch_len,
+                    args.d_model,
+                    args.n_heads,
+                    args.e_layers,
+                    args.d_layers,
+                    args.d_ff,
+                    args.factor,
+                    args.embed,
+                    args.distil,
+                    args.des,
+                    ii)
+                if args.date_record:
+                    # setting += datetime.now().strftime("%y-%m-%d_%H-%M-%S")
+                    setting = datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S") + setting
+                
+                exp = Exp(args)  # set experiments
+                print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
+                exp.finetune(setting, process)
+                
+                print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+                exp.test(setting, process)
+                torch.cuda.empty_cache()
+        else:
+            ii = 0
+            setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}'.format(
+                args.task_name,
+                args.model_id,
+                args.model,
+                args.data,
+                args.features,
+                args.seq_len,
+                args.label_len,
+                args.pred_len,
+                args.d_model,
+                args.n_heads,
+                args.e_layers,
+                args.d_layers,
+                args.d_ff,
+                args.factor,
+                args.embed,
+                args.distil,
+                args.des,
+                ii)
+            if args.date_record:
+                # setting += datetime.now().strftime("%y-%m-%d_%H-%M-%S")
+                setting = datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S") + setting
+            exp = Exp(args)  # set experiments
+            print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+            exp.test(setting,process, test=1)
+            torch.cuda.empty_cache()
 
     # 添加原始参数到列表中
     # test_unique_param_dict_list = make_param_dict_unique([origin_param_dict, val_top1_param_dict])
@@ -630,12 +958,18 @@ if __name__ == "__main__":
     if fast_mode:
         profiler = cProfile.Profile()
         profiler.enable()
-
+    gpu_index=args.gpu
+    date_time_str = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
+    setting_suffix = f"-P{num_params}-S{num_samples}-AB{ablation}-SD{seed}-MP{max_processes}"
+    res_root_dir = os.path.join('new_moti' if not fast_mode else 'debug', date_time_str + setting_suffix)
+    os.makedirs(f'{res_root_dir}', exist_ok=True)
+    
     print(f"data_name={data_name}, model_name={model_name}, pred_len={pred_len}, "
-          f"use_gpu={use_gpu}, gpu_indexes={gpu_indexes}")
+          f"use_gpu={use_gpu}, gpu_indexes={args.gpu}")
     res_dir = os.path.join(res_root_dir, data_name, model_name, f'pred_len-{pred_len}')
     atexit.register(atexit_handler, res_dir)
-    device = f"cuda:{gpu_indexes.split(',')[0]}" if use_gpu else 'cpu'
+    # device = f"cuda:{gpu_indexes.split(',')[0]}" if use_gpu else 'cpu'
+    device = f"cuda:{args.gpu}" if use_gpu else 'cpu'
     print(f"res_dir={res_dir}, device={device}")
 
     # log_file = os.path.join(res_dir, 'exp_single.log')
@@ -680,7 +1014,7 @@ if __name__ == "__main__":
         logging.info('###############################################')
         logging.info(f"Begin to process {data_name} {model_name} {target_column}...")
         res_dir_for_column = os.path.join(res_dir, target_column)
-        result_dict = main(data_name, model_name, target_column, pred_len, res_dir_for_column, device)
+        result_dict = main(data_name, model_name, target_column, pred_len, res_dir_for_column, device, args=args)
         record = {**result_dict, 'data_name': data_name, 'model_name': model_name,
                   'target_column': target_column, 'pred_len': pred_len}
         detailed_results.loc[len(detailed_results)] = record
