@@ -77,7 +77,8 @@ def train_or_test_or_val(
         augmentor, batch_sizes,  # 新增的参数!!!!!!!!!
         params_space, tuner, pruner_report_mode, pruner_metric_mode, num_params, terminator_manager: TerminatorManager,
         pd_data, res_dir,  # 可变
-        tr: TimeRecorder
+        tr: TimeRecorder,
+        args=None
 ):
     logging.info("###############################################")
     logging.info(f"Begin to {mode}...")
@@ -133,6 +134,8 @@ def train_or_test_or_val(
             max_batch_size = min(max_batch_size_for_mode, max_batch_size_for_cuda)
             logging.info(f"max_batch_size_for_cuda={max_batch_size_for_cuda}")
             if mode == 'test':  # test 可不能被截断
+                if args.model_name == 'Arima':
+                    max_batch_size_for_cuda = historys.shape[0]
                 assert historys.shape[0] <= max_batch_size_for_cuda, f"historys.shape[0]={historys.shape[0]}"
             # train/val 只选择最多max_batch_size个样本（均匀选取，保证每个params给到idx的相同
             if historys.shape[0] > max_batch_size:  # FIXME: 配合prune的step
@@ -154,7 +157,7 @@ def train_or_test_or_val(
             kwargs = ablation_substitute(kwargs)
             kwargs.update({'history_seqs': historys, 'model': model, 'dataset': dataset,
                            'target_column': target_column, 'patch_len': patch_len, 'pred_len': pred_len, 'mode': mode})
-            preds, process_dur, model_dur = adaptive_infer(**kwargs)
+            preds, process_dur, model_dur = adaptive_infer(args,**kwargs)
             log_time_delta(t_infer, "infer")
 
             # 如果有nan或inf则clip
@@ -402,7 +405,7 @@ def train_or_test_or_val_cov(
             kwargs.update({'history_seqs': historys, 'cov_history_seqs': cov_historys, 'model': model, 'dataset': dataset,
                            'target_column': target_column, 'patch_len': patch_len, 'pred_len': pred_len, 'mode': mode,
                            'pipeline_name': 'infer_cov'})
-            preds, process_dur, model_dur = adaptive_infer(**kwargs)
+            preds, process_dur, model_dur = adaptive_infer(args,**kwargs)
             log_time_delta(t_infer, "infer")
             
             # 如果有nan或inf则clip
@@ -717,7 +720,7 @@ def main(data_name, model_name, target_column, pred_len, res_dir, device, args=N
                                    train_batch_sizes,
                                    params_space, train_tuner, train_pruner_report_mode, train_pruner_metric_mode,
                                    max_num_params, terminator_manager,
-                                   pd_data, res_dir, tr_adapt)
+                                   pd_data, res_dir, tr_adapt, args)
     tr_adapt.time_end()
     many_plot(pd_data, mode, res_dir)
     tr_adapt.time_start()
@@ -791,7 +794,7 @@ def main(data_name, model_name, target_column, pred_len, res_dir, device, args=N
                                    val_batch_sizes,
                                    params_space, val_tuner, val_pruner_report_mode, val_pruner_metric_mode,
                                    len(val_unique_param_dict_list), None,
-                                   pd_data, res_dir, tr_adapt)
+                                   pd_data, res_dir, tr_adapt, args=args)
     tr_adapt.time_end()
     many_plot(pd_data, mode, res_dir)
 
@@ -901,6 +904,8 @@ def main(data_name, model_name, target_column, pred_len, res_dir, device, args=N
     # 测试集
     num_test_sample = 'all' if not fast_mode else 2  # !!!!!!!! FIXME: 为了快速测试
     test_batch_sizes = [get_max_batch_size_for_cuda(model_name)] if not fast_mode else [100]  # FIXME: 还是容易崩 Ok
+    if model_name=='Arima':
+        test_batch_sizes = [100]
     # test_batch_sizes = [min(test_batch_sizes[0], 30)] if 'Chronos' in model_name else test_batch_sizes
     logging.info(f"num_test_sample={num_test_sample}, test_batch_sizes={test_batch_sizes}")
     # 遍历param_dict_list，计算结果
@@ -915,7 +920,7 @@ def main(data_name, model_name, target_column, pred_len, res_dir, device, args=N
                                    test_batch_sizes,
                                    params_space, test_tuner, test_pruner_report_mode, test_pruner_metric_mode,
                                    len(test_unique_param_dict_list), None,
-                                   pd_data, res_dir, tr_test)
+                                   pd_data, res_dir, tr_test, args=args)
     tr_test.time_end()
     many_plot(pd_data, mode, res_dir)
     # 画直方图直观比较org和our的metric的分布差异

@@ -15,7 +15,7 @@ python3 -u ./AnyTransform/exp_single.py \
   --is_finetuning 1 \
   --seed 1 \
   --ckpt_path $ckpt_path\
-  --root_path ../tslib/dataset/traffic/ \
+  --root_path ../DATA/traffic/ \
   --data_path traffic.csv \
   --data_name traffic \
   --data custom \

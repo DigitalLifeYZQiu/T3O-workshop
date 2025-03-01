@@ -16,6 +16,8 @@ from AnyTransform import ExpTimer
 from AnyTransform.augmentor import Augmentor
 from AnyTransform.dataset import get_dataset, CustomDataset
 from transformers import AutoModelForCausalLM
+from darts.models import ARIMA
+from darts import TimeSeries
 
 def is_pycharm():
     for key, value in os.environ.items():
@@ -25,6 +27,34 @@ def is_pycharm():
 
 
 matplotlib.use('TkAgg') if is_pycharm() else None
+
+class Arima:
+    def __init__(self, model_name, ckpt_path, device='cpu'):
+        self.model_name = model_name
+        self.ckpt_path = ckpt_path
+        self.device = device
+        self.patch_len = 96
+        self.model = ARIMA()
+    
+    def forcast(self, data, pred_len):
+        # import pdb;
+        # pdb.set_trace()
+        B,S,C = data.shape
+        all_preds=[]
+        for b in range(B):
+            preds_for_b=[]
+            for c in range(C):
+                data_series = TimeSeries.from_values(data[b,:,c])
+                self.model.fit(data_series)
+                pred = self.model.predict(pred_len).values()
+                pred = pred.reshape(1, pred_len, 1)
+                preds_for_b.append(pred)
+            preds_for_b = np.concatenate(preds_for_b, axis=2)
+            all_preds.append(preds_for_b)
+        final_preds = np.concatenate(all_preds, axis=0)
+        final_preds = final_preds.reshape((B, pred_len, C))
+        return final_preds
+
 
 class TimerXL:
     def __init__(self, model_name, ckpt_path, device):
@@ -150,11 +180,11 @@ import numpy as np
 
 def get_model(model_name, device, args=None):
     if model_name == 'Timer-UTSD':
-        model = Timer(model_name, './Timer/ckpt/Building_timegpt_d1024_l8_p96_n64_new_full.ckpt', device, args)
+        model = Timer(model_name, '/data/qiuyunzhong/CKPT/Building_timegpt_d1024_l8_p96_n64_new_full.ckpt', device, args)
     elif model_name == 'Timer-LOTSA':
-        model = Timer(model_name, './Timer/ckpt/Large_timegpt_d1024_l8_p96_n64_new_full.ckpt', device, args)
+        model = Timer(model_name, '/data/qiuyunzhong/CKPT/Large_timegpt_d1024_l8_p96_n64_new_full.ckpt', device, args)
     elif model_name == 'Timer1':
-        model = Timer(model_name, '/data/qiuyunzhong/LTSM/checkpoints/Timer_forecast_1.0.ckpt', device, args)
+        model = Timer(model_name, '/data/qiuyunzhong/CKPT/Timer_forecast_1.0.ckpt', device, args)
     elif model_name == 'TimerXL':
         model = TimerXL(model_name, '/data/qiuyunzhong/Training-LTSM/checkpoints/models--thuml--timer-base/snapshots/35a991e1a21f8437c6d784465e87f24f5cc2b395', device)
     # elif model_name == '-PatchTST-UTSD':
@@ -171,6 +201,8 @@ def get_model(model_name, device, args=None):
         model = Chronos(model_name, './Chronos/ckpt/mini', device)
     elif model_name == 'Chronos-small':
         model = Chronos(model_name, './Chronos/ckpt/small', device)
+    elif model_name == 'Arima':
+        model = Arima(model_name, None, 'cpu')
     else:
         raise ValueError(f"Unknown model_name: {model_name}")
     return model

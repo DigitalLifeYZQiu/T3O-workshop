@@ -1,12 +1,12 @@
-#export CUDA_VISIBLE_DEVICES=7
+#export CUDA_VISIBLE_DEVICES=6
 
-model_name=Timer-UTSD
+model_name=Timer1
 seq_len=672
 label_len=576
 #pred_len=96
 #output_len=96
 patch_len=96
-ckpt_path=/data/qiuyunzhong/ts_adaptive_inference/Timer/ckpt/Building_timegpt_d1024_l8_p96_n64_new_full.ckpt
+ckpt_path=/data/qiuyunzhong/LTSM/checkpoints/Timer_forecast_1.0.ckpt
 
 for pred_len in 24 48 96 192;do
 python3 -u ./AnyTransform/exp_single.py \
@@ -15,11 +15,11 @@ python3 -u ./AnyTransform/exp_single.py \
   --is_finetuning 1 \
   --seed 1 \
   --ckpt_path $ckpt_path\
-  --root_path ../DATA/weather/ \
-  --data_path weather.csv \
-  --data_name weather \
+  --root_path ../DATA/traffic/ \
+  --data_path traffic.csv \
+  --data_name traffic \
   --data custom \
-  --model_id weather_postHybrid \
+  --model_id traffic_preHybrid \
   --model $model_name \
   --model_name $model_name \
   --features S \
@@ -40,7 +40,7 @@ python3 -u ./AnyTransform/exp_single.py \
   --itr 1 \
   --gpu 0 \
   --finetune_epochs 20 \
-  --num_params 500 \
-  --num_samples 500 \
+  --num_params 50 \
+  --num_samples 50 \
   --ablation none
 done

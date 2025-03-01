@@ -15,7 +15,7 @@ python3 -u ./AnyTransform/exp_single.py \
   --is_finetuning 1 \
   --seed 1 \
   --ckpt_path $ckpt_path\
-  --root_path ../tslib/dataset/weather/ \
+  --root_path ../DATA/weather/ \
   --data_path weather.csv \
   --data_name weather \
   --data custom \

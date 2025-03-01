@@ -15,7 +15,7 @@ python3 -u ./AnyTransform/exp_single.py \
   --is_finetuning 1 \
   --seed 1 \
   --ckpt_path $ckpt_path\
-  --root_path ../tslib/dataset/ETT-small/ \
+  --root_path ../DATA/ETT-small/ \
   --data_path ETTh2.csv \
   --data_name ETTh2 \
   --data ETTh2 \

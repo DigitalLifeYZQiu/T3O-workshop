@@ -15,7 +15,7 @@ python3 -u ./AnyTransform/exp_single.py \
   --is_finetuning 1 \
   --seed 1 \
   --ckpt_path $ckpt_path\
-  --root_path ../tslib/dataset/electricity/ \
+  --root_path ../DATA/electricity/ \
   --data_path electricity.csv \
   --data_name electricity \
   --data custom \

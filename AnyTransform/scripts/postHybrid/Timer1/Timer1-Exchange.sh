@@ -15,7 +15,7 @@ python3 -u ./AnyTransform/exp_single.py \
   --is_finetuning 1 \
   --seed 1 \
   --ckpt_path $ckpt_path\
-  --root_path ../tslib/dataset/exchange_rate/ \
+  --root_path ../DATA/exchange_rate/ \
   --data_path exchange_rate.csv \
   --data_name exchange_rate \
   --data custom \

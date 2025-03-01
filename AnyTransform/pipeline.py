@@ -2,11 +2,11 @@ import numpy as np
 
 from AnyTransform.transforms import *
 from AnyTransform.utils import *
-
+import copy
 debug_mode = False
 
 
-def adaptive_infer(**kwargs):
+def adaptive_infer(args, **kwargs):
     pipeline_name = kwargs.pop("pipeline_name")
     logging.info(f"pipeline_name={pipeline_name}")
     if pipeline_name == "infer1":
@@ -14,7 +14,7 @@ def adaptive_infer(**kwargs):
     elif pipeline_name == "infer2":
         return infer2(**kwargs)
     elif pipeline_name == "infer3":
-        return infer3(**kwargs)
+        return infer3(args=args, **kwargs)
     elif pipeline_name== 'infer_cov':
         return infer_cov(**kwargs)
     else:
@@ -352,7 +352,7 @@ def infer2(history_seqs, model, dataset, target_column, patch_len, pred_len, mod
 def infer3(history_seqs, model, dataset, target_column, patch_len, pred_len, mode, sampler_factor, trimmer_seq_len,
            aligner_mode, aligner_method, normalizer_method, normalizer_mode, normalizer_ratio, inputer_detect_method,
            inputer_fill_method, warper_method, decomposer_period, decomposer_components, differentiator_n,
-           denoiser_method, clip_factor):
+           denoiser_method, clip_factor, args):
 
     tr_process = TimeRecorder("process")
     tr_model = TimeRecorder("model")
@@ -451,6 +451,99 @@ def infer3(history_seqs, model, dataset, target_column, patch_len, pred_len, mod
 
     tr_process.time_end()
     tr_model.time_start()
+    
+    # # preds = model.forcast(seq_after_preprocess, pred_len_needed)
+    # 
+    # from AnyTransform.model import get_model
+    # model_n = get_model(args.model_name, f"cuda:{args.gpu}", args)
+    # if 'Timer' in args.model_name:
+    #     # from Timer.exp.exp_large_few_shot_roll_demo import Exp_Large_Few_Shot_Roll_Demo
+    #     # Exp = Exp_Large_Few_Shot_Roll_Demo
+    #     # from pipeline import Process
+    #     param_dict={
+    #         'sampler_factor': sampler_factor,
+    #         'trimmer_seq_len': trimmer_seq_len,
+    #         'aligner_mode': aligner_mode,
+    #         'aligner_method': aligner_method,
+    #         'normalizer_method': normalizer_method,
+    #         'normalizer_mode': normalizer_mode,
+    #         'normalizer_ratio': normalizer_ratio,
+    #         'inputer_detect_method': inputer_detect_method,
+    #         'inputer_fill_method': inputer_fill_method,
+    #         'warper_method': warper_method,
+    #         'decomposer_period': decomposer_period,
+    #         'decomposer_components': decomposer_components,
+    #         'differentiator_n': differentiator_n,
+    #         'denoiser_method': denoiser_method,
+    #         'clip_factor': clip_factor,
+    #     }
+    #     process = Process(model, dataset, param_dict)
+    #     # setting record of experiments
+    #     print('Args in experiment:')
+    #     print(args)
+    #     if args.is_finetuning:
+    #         for ii in range(args.itr):
+    #             # setting record of experiments
+    #             setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_predl{}_patchl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}'.format(
+    #                 args.task_name,
+    #                 args.model_id,
+    #                 args.model,
+    #                 args.data,
+    #                 args.features,
+    #                 args.seq_len,
+    #                 args.label_len,
+    #                 args.pred_len,
+    #                 args.patch_len,
+    #                 args.d_model,
+    #                 args.n_heads,
+    #                 args.e_layers,
+    #                 args.d_layers,
+    #                 args.d_ff,
+    #                 args.factor,
+    #                 args.embed,
+    #                 args.distil,
+    #                 args.des,
+    #                 ii)
+    #             if args.date_record:
+    #                 # setting += datetime.now().strftime("%y-%m-%d_%H-%M-%S")
+    #                 setting = datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S") + setting
+    #             
+    #             # exp = Exp(args)  # set experiments
+    #             # exp = model.exp
+    #             print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
+    #             model_n.exp.finetune(setting, process)
+    #             
+    #             print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+    #             model_n.exp.test(setting, process)
+    #             torch.cuda.empty_cache()
+    #     else:
+    #         ii = 0
+    #         setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}'.format(
+    #             args.task_name,
+    #             args.model_id,
+    #             args.model,
+    #             args.data,
+    #             args.features,
+    #             args.seq_len,
+    #             args.label_len,
+    #             args.pred_len,
+    #             args.d_model,
+    #             args.n_heads,
+    #             args.e_layers,
+    #             args.d_layers,
+    #             args.d_ff,
+    #             args.factor,
+    #             args.embed,
+    #             args.distil,
+    #             args.des,
+    #             ii)
+    #         if args.date_record:
+    #             # setting += datetime.now().strftime("%y-%m-%d_%H-%M-%S")
+    #             setting = datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S") + setting
+    #         # exp = Exp(args)  # set experiments
+    #         print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+    #         model_n.exp.test(setting, process, test=1)
+    #         torch.cuda.empty_cache()
 
     try:
         preds = model.forcast(seq_after_preprocess, pred_len_needed)

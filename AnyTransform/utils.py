@@ -70,7 +70,10 @@ def get_params_space_and_org(fast_mode=None):
         },
         'inputer_detect_method': {
             'type': 'str',  # iqr计算时间长了一点(1/2 model)！！
-            'values': ['none', '3_sigma', '1.5_iqr']
+            # * Original value
+            # 'values': ['none', '3_sigma', '1.5_iqr']
+            # * Remove inputer
+            'values': ['none']
             # if ablation != 'Inputer' else ['none'],
             # 'values': ['none', '3_sigma', '1.5_iqr']
         },
@@ -109,7 +112,10 @@ def get_params_space_and_org(fast_mode=None):
         # Differentiator
         'differentiator_n': {
             'type': 'int',
-            'values': [0, 1]
+            # * Original value
+            # 'values': [0, 1]
+            # * Remove Differentiator
+            'values': [0]
             # if ablation != 'Differentiator' else [0],
         },
         'pipeline_name': {
@@ -384,6 +390,8 @@ def get_max_batch_size_for_cuda(model_name):
         res = 5000
     elif 'MOIRAI-large' in model_name:
         res = 4000
+    elif 'Arima' in model_name:
+        res = 1
     else:
         raise ValueError(f"Unknown model_name: {model_name}")
     # return min(res, maximum)  # for train speed
@@ -406,15 +414,22 @@ def my_clip(seq_in, seq_out, nan_inf_clip_factor=None, min_max_clip_factor=None)
     assert nan_inf_clip_factor is not None or min_max_clip_factor is not None, \
         "nan_inf_clip_factor and min_max_clip_factor cannot be both None!"
 
-    if nan_inf_clip_factor is not None and (np.isnan(seq_out).any() or np.isinf(seq_out).any()):
-        max_allowed = max_values + nan_inf_clip_factor * range_values
-        min_allowed = min_values - nan_inf_clip_factor * range_values
-        logging.info(f"seq_out contains NaN values!!! \n")
-        logging.debug(f"seq_out contains NaN values!!!: {seq_out}")
-        # seq_out = np.nan_to_num(seq_out, nan=(max_values + min_values) / 2, posinf=max_allowed, neginf=min_allowed)
-        if isinstance(seq_out, np.ndarray):
+   
+    if isinstance(seq_out, np.ndarray):
+        if nan_inf_clip_factor is not None and (np.isnan(seq_out).any() or np.isinf(seq_out).any()):
+            max_allowed = max_values + nan_inf_clip_factor * range_values
+            min_allowed = min_values - nan_inf_clip_factor * range_values
+            logging.info(f"seq_out contains NaN values!!! \n")
+            logging.debug(f"seq_out contains NaN values!!!: {seq_out}")
+            # seq_out = np.nan_to_num(seq_out, nan=(max_values + min_values) / 2, posinf=max_allowed, neginf=min_allowed)
             seq_out = np.nan_to_num(seq_out, nan=max_allowed, posinf=max_allowed, neginf=min_allowed)  # nan hard punish
-        elif isinstance(seq_out, torch.Tensor):
+    elif isinstance(seq_out, torch.Tensor):
+        if nan_inf_clip_factor is not None and (torch.isnan(seq_out).any() or torch.isinf(seq_out).any()):
+            max_allowed = max_values + nan_inf_clip_factor * range_values
+            min_allowed = min_values - nan_inf_clip_factor * range_values
+            logging.info(f"seq_out contains NaN values!!! \n")
+            logging.debug(f"seq_out contains NaN values!!!: {seq_out}")
+            # seq_out = np.nan_to_num(seq_out, nan=(max_values + min_values) / 2, posinf=max_allowed, neginf=min_allowed)
             seq_out = torch.nan_to_num(seq_out, nan=max_allowed, posinf=max_allowed, neginf=min_allowed)  # nan hard punish
         
         # logging.warning(f"seq_out after filling NaN values: {seq_out}")

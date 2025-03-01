@@ -128,21 +128,21 @@ def get_dataset(data_name, fast_split=None):
     fast_split = fast_split if fast_split is not None else False  # FIXME: 让test样本多些公平些 但是Uni2ts太慢了
 
     if data_name == 'ETTh1':
-        dataset = EttHour('../tslib/dataset/ETT-small', 'ETTh1.csv', fast_split)
+        dataset = EttHour('../DATA/ETT-small', 'ETTh1.csv', fast_split)
     elif data_name == 'ETTh2':
-        dataset = EttHour('../tslib/dataset/ETT-small/', 'ETTh2.csv', fast_split)
+        dataset = EttHour('../DATA/ETT-small/', 'ETTh2.csv', fast_split)
     elif data_name == 'ETTm1':
-        dataset = EttMinute('../tslib/dataset/ETT-small/', 'ETTm1.csv', fast_split)
+        dataset = EttMinute('../DATA/ETT-small/', 'ETTm1.csv', fast_split)
     elif data_name == 'ETTm2':
-        dataset = EttMinute('../tslib/dataset/ETT-small/', 'ETTm2.csv', fast_split)
+        dataset = EttMinute('../DATA/ETT-small/', 'ETTm2.csv', fast_split)
     elif data_name == 'Exchange' or data_name == 'exchange_rate':
-        dataset = Exchange('../tslib/dataset/exchange_rate/', 'exchange_rate.csv', fast_split)
+        dataset = Exchange('../DATA/exchange_rate/', 'exchange_rate.csv', fast_split)
     elif data_name == 'Weather' or data_name == 'weather':
-        dataset = Weather('../tslib/dataset/weather/', 'weather.csv', fast_split)
+        dataset = Weather('../DATA/weather/', 'weather.csv', fast_split)
     elif data_name == 'Electricity' or data_name == 'electricity':
-        dataset = Electricity('../tslib/dataset/electricity/', 'electricity.csv', fast_split)
+        dataset = Electricity('../DATA/electricity/', 'electricity.csv', fast_split)
     elif data_name == 'Traffic' or data_name == 'traffic':
-        dataset = Traffic('../tslib/dataset/traffic/', 'traffic.csv', fast_split)
+        dataset = Traffic('../DATA/traffic/', 'traffic.csv', fast_split)
     else:
         raise ValueError(f"Unknown data_name: {data_name}")
     return dataset
