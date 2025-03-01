@@ -825,76 +825,76 @@ def main(data_name, model_name, target_column, pred_len, res_dir, device, args=N
         #                                                res_dir)[0]
 
     logging.info(f"val_top1_param_dict={val_top1_param_dict}")#! This is the Best Preprocess Technique
-    if 'Timer' in model_name:
-        from Timer.exp.exp_large_few_shot_roll_demo import Exp_Large_Few_Shot_Roll_Demo
-        Exp = Exp_Large_Few_Shot_Roll_Demo
-        from pipeline import Process
-        process = Process(model, dataset, val_top1_param_dict)
-        # setting record of experiments
-        print('Args in experiment:')
-        print(args)
-        if args.is_finetuning:
-            for ii in range(args.itr):
-                # setting record of experiments
-                setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_predl{}_patchl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}'.format(
-                    args.task_name,
-                    args.model_id,
-                    args.model,
-                    args.data,
-                    args.features,
-                    args.seq_len,
-                    args.label_len,
-                    args.pred_len,
-                    args.patch_len,
-                    args.d_model,
-                    args.n_heads,
-                    args.e_layers,
-                    args.d_layers,
-                    args.d_ff,
-                    args.factor,
-                    args.embed,
-                    args.distil,
-                    args.des,
-                    ii)
-                if args.date_record:
-                    # setting += datetime.now().strftime("%y-%m-%d_%H-%M-%S")
-                    setting = datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S") + setting
-                
-                exp = Exp(args)  # set experiments
-                print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
-                exp.finetune(setting, process)
-                
-                print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-                exp.test(setting, process)
-                torch.cuda.empty_cache()
-        else:
-            ii = 0
-            setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}'.format(
-                args.task_name,
-                args.model_id,
-                args.model,
-                args.data,
-                args.features,
-                args.seq_len,
-                args.label_len,
-                args.pred_len,
-                args.d_model,
-                args.n_heads,
-                args.e_layers,
-                args.d_layers,
-                args.d_ff,
-                args.factor,
-                args.embed,
-                args.distil,
-                args.des,
-                ii)
-            if args.date_record:
-                # setting += datetime.now().strftime("%y-%m-%d_%H-%M-%S")
-                setting = datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S") + setting
-            exp = Exp(args)  # set experiments
-            print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-            exp.test(setting,process, test=1)
-            torch.cuda.empty_cache()
+    # if 'Timer' in model_name:
+    #     from Timer.exp.exp_large_few_shot_roll_demo import Exp_Large_Few_Shot_Roll_Demo
+    #     Exp = Exp_Large_Few_Shot_Roll_Demo
+    #     from pipeline import Process
+    #     process = Process(model, dataset, val_top1_param_dict)
+    #     # setting record of experiments
+    #     print('Args in experiment:')
+    #     print(args)
+    #     if args.is_finetuning:
+    #         for ii in range(args.itr):
+    #             # setting record of experiments
+    #             setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_predl{}_patchl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}'.format(
+    #                 args.task_name,
+    #                 args.model_id,
+    #                 args.model,
+    #                 args.data,
+    #                 args.features,
+    #                 args.seq_len,
+    #                 args.label_len,
+    #                 args.pred_len,
+    #                 args.patch_len,
+    #                 args.d_model,
+    #                 args.n_heads,
+    #                 args.e_layers,
+    #                 args.d_layers,
+    #                 args.d_ff,
+    #                 args.factor,
+    #                 args.embed,
+    #                 args.distil,
+    #                 args.des,
+    #                 ii)
+    #             if args.date_record:
+    #                 # setting += datetime.now().strftime("%y-%m-%d_%H-%M-%S")
+    #                 setting = datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S") + setting
+    #             
+    #             exp = Exp(args)  # set experiments
+    #             print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
+    #             exp.finetune(setting, process)
+    #             
+    #             print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+    #             exp.test(setting, process)
+    #             torch.cuda.empty_cache()
+    #     else:
+    #         ii = 0
+    #         setting = '{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}'.format(
+    #             args.task_name,
+    #             args.model_id,
+    #             args.model,
+    #             args.data,
+    #             args.features,
+    #             args.seq_len,
+    #             args.label_len,
+    #             args.pred_len,
+    #             args.d_model,
+    #             args.n_heads,
+    #             args.e_layers,
+    #             args.d_layers,
+    #             args.d_ff,
+    #             args.factor,
+    #             args.embed,
+    #             args.distil,
+    #             args.des,
+    #             ii)
+    #         if args.date_record:
+    #             # setting += datetime.now().strftime("%y-%m-%d_%H-%M-%S")
+    #             setting = datetime.datetime.now().strftime("%y-%m-%d_%H-%M-%S") + setting
+    #         exp = Exp(args)  # set experiments
+    #         print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+    #         exp.test(setting,process, test=1)
+    #         torch.cuda.empty_cache()
 
     # 添加原始参数到列表中
     # test_unique_param_dict_list = make_param_dict_unique([origin_param_dict, val_top1_param_dict])

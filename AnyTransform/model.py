@@ -181,8 +181,24 @@ import numpy as np
 def get_model(model_name, device, args=None):
     if model_name == 'Timer-UTSD':
         model = Timer(model_name, '/data/qiuyunzhong/CKPT/Building_timegpt_d1024_l8_p96_n64_new_full.ckpt', device, args)
+    elif model_name == 'Timer-UTSD-PT24':
+        model = Timer(model_name, '/data/qiuyunzhong/LTSM/checkpoints/25-03-01_17-41-52forecast_T3O_few_shot_Timer_T3O_ftS_sl672_ll576_pl24_pl96_dm1024_nh8_el8_dl1_df2048_fc3_ebtimeF_dtTrue_Exp/checkpoint.pth', device, args)
+    elif model_name == 'Timer-UTSD-PT48':
+        model = Timer(model_name, '/data/qiuyunzhong/LTSM/checkpoints/25-03-01_17-41-52forecast_T3O_few_shot_Timer_T3O_ftS_sl672_ll576_pl48_pl96_dm1024_nh8_el8_dl1_df2048_fc3_ebtimeF_dtTrue_Exp/checkpoint.pth', device, args)
+    elif model_name == 'Timer-UTSD-PT96':
+        model = Timer(model_name, '/data/qiuyunzhong/LTSM/checkpoints/25-03-01_17-41-51forecast_T3O_few_shot_Timer_T3O_ftS_sl672_ll576_pl96_pl96_dm1024_nh8_el8_dl1_df2048_fc3_ebtimeF_dtTrue_Exp/checkpoint.pth', device, args)
+    elif model_name == 'Timer-UTSD-PT192':
+        model = Timer(model_name, '/data/qiuyunzhong/LTSM/checkpoints/25-03-01_17-41-51forecast_T3O_few_shot_Timer_T3O_ftS_sl672_ll576_pl192_pl96_dm1024_nh8_el8_dl1_df2048_fc3_ebtimeF_dtTrue_Exp/checkpoint.pth', device, args)
     elif model_name == 'Timer-LOTSA':
         model = Timer(model_name, '/data/qiuyunzhong/CKPT/Large_timegpt_d1024_l8_p96_n64_new_full.ckpt', device, args)
+    elif model_name == 'Timer-LOTSA-PT24':
+        model = Timer(model_name, '/data/qiuyunzhong/LTSM/checkpoints/25-03-01_17-44-27forecast_T3O_few_shot_Timer_T3O_ftS_sl672_ll576_pl24_pl96_dm1024_nh8_el8_dl1_df2048_fc3_ebtimeF_dtTrue_Exp/checkpoint.pth', device, args)
+    elif model_name == 'Timer-LOTSA-PT48':
+        model = Timer(model_name, '/data/qiuyunzhong/LTSM/checkpoints/25-03-01_17-44-27forecast_T3O_few_shot_Timer_T3O_ftS_sl672_ll576_pl48_pl96_dm1024_nh8_el8_dl1_df2048_fc3_ebtimeF_dtTrue_Exp/checkpoint.pth', device, args)
+    elif model_name == 'Timer-LOTSA-PT96':
+        model = Timer(model_name, '/data/qiuyunzhong/LTSM/checkpoints/25-03-01_17-44-27forecast_T3O_few_shot_Timer_T3O_ftS_sl672_ll576_pl96_pl96_dm1024_nh8_el8_dl1_df2048_fc3_ebtimeF_dtTrue_Exp/checkpoint.pth', device, args)
+    elif model_name == 'Timer-LOTSA-PT192':
+        model = Timer(model_name, '/data/qiuyunzhong/LTSM/checkpoints/25-03-01_17-44-27forecast_T3O_few_shot_Timer_T3O_ftS_sl672_ll576_pl192_pl96_dm1024_nh8_el8_dl1_df2048_fc3_ebtimeF_dtTrue_Exp/checkpoint.pth', device, args)
     elif model_name == 'Timer1':
         model = Timer(model_name, '/data/qiuyunzhong/CKPT/Timer_forecast_1.0.ckpt', device, args)
     elif model_name == 'TimerXL':
